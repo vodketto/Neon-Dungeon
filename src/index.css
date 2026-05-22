@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@400;700;800&family=VT323&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #050508;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    @apply font-mono;
+  }
+}
+
+@layer utilities {
+  .animate-shine {
+    animation: shine 2s infinite;
+  }
+  .animate-bounce-x {
+    animation: bounce-x 1s infinite;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@keyframes shine {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes bounce-x {
+  0%, 100% { transform: translateX(-25%); animation-timing-function: cubic-bezier(0.8, 0, 1, 1); }
+  50% { transform: translateX(0); animation-timing-function: cubic-bezier(0, 0, 0.2, 1); }
+}
+
+@keyframes legendary-glow {
+  0% { text-shadow: 0 0 10px #ecc94b, 0 0 20px #ecc94b; color: #fff; }
+  50% { text-shadow: 0 0 30px #f00, 0 0 40px #ecc94b; color: #ecc94b; }
+  100% { text-shadow: 0 0 10px #ecc94b, 0 0 20px #ecc94b; color: #fff; }
+}
+
+@keyframes slotSpin {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+.legendary-glow {
+  animation: legendary-glow 2s infinite ease-in-out;
+  font-weight: 900 !important;
+  text-transform: uppercase;
+}

@@ -1,0 +1,32 @@
+{
+  "name": "Neon Dungeon",
+  "short_name": "NeonDungeon",
+  "description": "An action-packed cyberpunk rougelite dungeon crawler. Fight hordes of glitch enemies, level up using a rogue slot-machine, upgrade your skill tree, and survive the great serpent!",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#06b6d4",
+  "orientation": "any",
+  "categories": ["games", "arcade", "action"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
