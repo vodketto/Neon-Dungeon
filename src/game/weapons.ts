@@ -435,7 +435,7 @@ export const WEAPONS: Record<string, Weapon> = {
         color: '#ffffff',
         rarity: 'mythic',
         cooldown: 45,
-        description: 'Spara da sola colpendo i nemici con stelle a ricerca.',
+        description: 'Spara da sola con stelle a ricerca. Abilità Magica: evoca una raggiera di 5 grandi stelle leggendarie devastanti (consuma molto mana).',
         special_behavior: 'auto_star',
         homing: true,
         homingRange: 400,
@@ -454,5 +454,20 @@ export const WEAPONS: Record<string, Weapon> = {
         cooldown: 40,
         description: 'Antica lama forgiata nel cuore di una stella. Scatena onde circolari di energia solare che crescono con il potere del portatore.',
         special_behavior: 'circle_sun'
+    },
+    'Lanciarazzi': {
+        id: 'rocket_launcher',
+        name: 'Lanciarazzi',
+        icon: '🚀',
+        type: 'sword',
+        angle: 0.1,
+        range: 500,
+        width: 0,
+        color: '#ff4500',
+        rarity: 'epic',
+        cooldown: 60,
+        description: 'Lancia razzi a ricerca. I razzi bloccano il mob colpito e dopo 2 secondi esplodono con danni ad area. Eroe immune.',
+        homing: true,
+        special_behavior: 'homing_rocket'
     },
 };

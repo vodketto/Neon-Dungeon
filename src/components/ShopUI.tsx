@@ -17,7 +17,8 @@ interface ShopItem {
 
 const POTIONS: ShopItem[] = [
     { id: 1, name: 'HP Serum', price: 20, stock: 5, description: 'RESTORE VITALS', icon: '❤️', type: 'potion', rarity: 'common' },
-    { id: 2, name: 'MP Charge', price: 20, stock: 5, description: 'REFILL ETHER', icon: '💧', type: 'potion', rarity: 'common' },
+    { id: 2, name: 'MP Charge', price: 20, stock: 5, description: 'REFILL ETHER', icon: '💧', rarity: 'common' },
+    { id: 14, name: 'Jukebox Tune', price: 10, stock: 3, description: 'PLAY TRACK', icon: '📻', rarity: 'common' },
 ];
 const WEAPONS_PHYS: ShopItem[] = [
     { id: 4, name: 'Heavy Module', price: 120, stock: 1, description: 'PHYSICAL UPGRADE', icon: '⚔️', type: 'weapon', rarity: 'uncommon' },
@@ -84,6 +85,7 @@ export default function ShopUI({
     timeSurvived,
     onClose,
     onContinue,
+    onTrophyProgress,
     isMerchantRoom,
     language = 'it',
 }: {
@@ -92,6 +94,7 @@ export default function ShopUI({
     timeSurvived: number;
     onClose: () => void;
     onContinue: () => void;
+    onTrophyProgress?: (id: string) => void;
     isMerchantRoom?: boolean;
     language?: 'it' | 'en';
 }) {
@@ -161,14 +164,18 @@ export default function ShopUI({
                 if (stats.current.exp >= stats.current.nextExp) {
                     stats.current.exp -= stats.current.nextExp;
                     stats.current.lvl++;
+                    stats.current.skillPoints = (stats.current.skillPoints || 0) + 1;
                     stats.current.maxHp += 20;
                     stats.current.hp = stats.current.maxHp;
                     stats.current.strength += 1;
                     stats.current.nextExp = Math.floor(stats.current.nextExp * 1.5);
                     triggerLevelUp();
                 }
+            } else if (item.name === 'Jukebox Tune') {
+                stats.current.jukeboxesUsed = (stats.current.jukeboxesUsed || 0) + 1;
+                if (onTrophyProgress) onTrophyProgress('dungeon_dj');
+                audio.playShopMusic(); 
             }
-            
             audio.playBuySound();
         }
     };

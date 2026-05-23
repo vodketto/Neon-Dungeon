@@ -69,6 +69,28 @@ export default function LevelUpSlotMachineUI({ stats, onClose, lang, onOpenSkill
     const [stopping, setStopping] = useState([false, false, false]);
     const [stopped, setStopped] = useState([false, false, false]);
     const [, setTick] = useState(0);
+    const appliedItems = useRef(false);
+    const reelItemsRef = useRef<StatOption[]>([]);
+
+    useEffect(() => {
+        reelItemsRef.current = reelItems;
+    }, [reelItems]);
+
+    const applyLoot = () => {
+        if (!appliedItems.current && reelItemsRef.current.length > 0) {
+            reelItemsRef.current.forEach(item => {
+                item.apply(stats.current);
+                console.log('Applied automatically/collect:', item.id, 'New defense:', stats.current.defense);
+            });
+            appliedItems.current = true;
+        }
+    };
+
+    useEffect(() => {
+        return () => {
+            applyLoot();
+        };
+    }, []);
 
     useEffect(() => {
         const interval = setInterval(() => {
@@ -106,7 +128,7 @@ export default function LevelUpSlotMachineUI({ stats, onClose, lang, onOpenSkill
     }, []);
 
     const handleCollect = () => {
-        reelItems.forEach(item => item.apply(stats.current));
+        applyLoot();
         onClose();
     };
 

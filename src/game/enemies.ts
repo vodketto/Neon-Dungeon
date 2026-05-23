@@ -1,3 +1,4 @@
+
 export const ENEMY_NAMES: Record<string, {it: string, en: string}> = {
     warrior: { it: 'Guerriero', en: 'Warrior' },
     archer: { it: 'Arciere', en: 'Archer' },
@@ -19,6 +20,30 @@ export const ENEMY_NAMES: Record<string, {it: string, en: string}> = {
     void_architect: { it: 'Architetto del Vuoto', en: 'Void Architect' },
     void_fragment: { it: 'Frammento del Vuoto', en: 'Void Fragment' }
 };
+
+export function getEnemyDefense(type: string): { physicalDefense: number, magicalDefense: number } {
+    switch (type) {
+        case 'specter': return { physicalDefense: 80, magicalDefense: 0 };
+        case 'mage': return { physicalDefense: 0, magicalDefense: 40 };
+        case 'warrior': return { physicalDefense: 10, magicalDefense: 0 };
+        case 'skeleton': return { physicalDefense: 5, magicalDefense: 0 };
+        case 'archer': return { physicalDefense: 5, magicalDefense: 0 };
+        case 'miniboss': return { physicalDefense: 15, magicalDefense: 15 };
+        case 'boss':
+        case 'slimmy':
+        case 'serpent':
+        case 'shadow_reaper': 
+        case 'void_architect':
+            return { physicalDefense: 30, magicalDefense: 30 };
+        case 'vampire': return { physicalDefense: 10, magicalDefense: 20 };
+        case 'shield_bearer': return { physicalDefense: 50, magicalDefense: 10 };
+        case 'necromancer': return { physicalDefense: 5, magicalDefense: 30 };
+        case 'charger': return { physicalDefense: 15, magicalDefense: 5 };
+        case 'bomber': return { physicalDefense: 0, magicalDefense: 0 };
+        case 'teleporter': return { physicalDefense: 0, magicalDefense: 40 };
+        default: return { physicalDefense: 0, magicalDefense: 0 };
+    }
+}
 
 export const ENEMY_PIXEL_ARTS: Record<string, {colors: Record<string, string>, pixels: string[]}> = {
     archer: { // Green, Robin Hood

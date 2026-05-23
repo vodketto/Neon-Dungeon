@@ -20,6 +20,9 @@ export interface Room {
   isRevealed?: boolean;
   wallX?: number;
   wallY?: number;
+  isStanza?: boolean;
+  accessCount?: number;
+  accessWidths?: number[];
 }
 
 export interface Torch {
@@ -461,6 +464,93 @@ function generateDungeonInternal(widthLimit: number = 45, heightLimit: number = 
   if (chests.length > 0) {
       chests[Math.floor(rng() * chests.length)].isGuaranteedWeaponChest = true;
   }
+
+  // 5. Perfect Room Recognition Algorithm (detectStanze)
+  // By room ("stanza"), we mean an area of at least 4x2 or 2x4 tiles with exactly 1 entrance of width 1 or 2.
+  rooms.forEach((room) => {
+    // Check size: at least 4x2 tiles or more
+    const sizeOk = (room.w >= 4 && room.h >= 2) || (room.w >= 2 && room.h >= 4);
+
+    const borderTiles: { x: number; y: number }[] = [];
+
+    // Top border
+    for (let tx = room.x; tx < room.x + room.w; tx++) {
+      const ty = room.y - 1;
+      if (ty >= 0 && ty < height && tx >= 0 && tx < width) {
+        if (grid[ty][tx] > 0) {
+          borderTiles.push({ x: tx, y: ty });
+        }
+      }
+    }
+    // Bottom border
+    for (let tx = room.x; tx < room.x + room.w; tx++) {
+      const ty = room.y + room.h;
+      if (ty >= 0 && ty < height && tx >= 0 && tx < width) {
+        if (grid[ty][tx] > 0) {
+          borderTiles.push({ x: tx, y: ty });
+        }
+      }
+    }
+    // Left border
+    for (let ty = room.y; ty < room.y + room.h; ty++) {
+      const tx = room.x - 1;
+      if (ty >= 0 && ty < height && tx >= 0 && tx < width) {
+        if (grid[ty][tx] > 0) {
+          borderTiles.push({ x: tx, y: ty });
+        }
+      }
+    }
+    // Right border
+    for (let ty = room.y; ty < room.y + room.h; ty++) {
+      const tx = room.x + room.w;
+      if (ty >= 0 && ty < height && tx >= 0 && tx < width) {
+        if (grid[ty][tx] > 0) {
+          borderTiles.push({ x: tx, y: ty });
+        }
+      }
+    }
+
+    // Group border floor/corridor/secret tiles into Chebyshev-connected components
+    const visited = new Set<string>();
+    const components: { x: number; y: number }[][] = [];
+
+    borderTiles.forEach((tile) => {
+      const tileKey = `${tile.x},${tile.y}`;
+      if (visited.has(tileKey)) return;
+
+      const comp: { x: number; y: number }[] = [];
+      const queue = [tile];
+      visited.add(tileKey);
+
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        comp.push(curr);
+
+        borderTiles.forEach((other) => {
+          const otherKey = `${other.x},${other.y}`;
+          if (visited.has(otherKey)) return;
+
+          const dx = Math.abs(curr.x - other.x);
+          const dy = Math.abs(curr.y - other.y);
+          if (dx <= 1 && dy <= 1) {
+            visited.add(otherKey);
+            queue.push(other);
+          }
+        });
+      }
+      components.push(comp);
+    });
+
+    const accessCount = components.length;
+    const accessWidths = components.map(comp => comp.length);
+
+    // Filter: "stanza" must have exactly 1 entrance of width 1 or 2 tiles
+    const hasUniqueAccessOfSize1Or2 = accessCount === 1 && (accessWidths[0] === 1 || accessWidths[0] === 2);
+
+    room.isStanza = sizeOk && hasUniqueAccessOfSize1Or2;
+    room.accessCount = accessCount;
+    room.accessWidths = accessWidths;
+  });
 
   return { grid, rooms, torches, chests, bossRoomIdx, level, seed };
 }

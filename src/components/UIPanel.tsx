@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sword, Shield, Zap, Skull, Coins, Thermometer } from 'lucide-react';
+import { Sword, Shield, Zap, Skull, Coins, Thermometer, Trophy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface UIPanelProps {
@@ -26,6 +26,9 @@ interface UIPanelProps {
   skillPoints?: number;
   onOpenSkills?: () => void;
   onOpenBestiary?: () => void;
+  onOpenTrophies?: () => void;
+  onPause?: () => void;
+  highlightedStats?: Record<string, boolean>;
   // Secondary stats
   defense?: number;
   hpRegen?: number;
@@ -41,7 +44,8 @@ export default function UIPanel({
   physicalWeaponName, physicalWeaponLevel, magicWeaponName, magicWeaponLevel, 
   physicalWeaponRarity = 'common', magicWeaponRarity = 'common', 
   heroClass = 'warrior', language = 'it', score = 0, exp = 0, nextExp = 100, 
-  skillPoints = 0, onOpenSkills, onOpenBestiary,
+  skillPoints = 0, onOpenSkills, onOpenBestiary, onOpenTrophies, onPause,
+  highlightedStats = {},
   // Secondary stats
   defense = 0,
   hpRegen = 0,
@@ -94,17 +98,37 @@ export default function UIPanel({
     }
   };
 
-  const StatItem = ({ icon: Icon, value, tooltip, colorClass = "text-white", onClick }: { icon: any, value: string | number, tooltip: string, colorClass?: string, onClick?: () => void }) => (
-    <button 
-      className={`flex items-center gap-1.5 group outline-none ${onClick ? 'cursor-pointer hover:bg-slate-800/80 px-1.5 py-0.5 rounded transition-colors' : 'cursor-help'}`} 
-      title={tooltip}
-      onClick={onClick}
-      disabled={!onClick}
+  const StatHighlight = ({ isHighlighted, children }: { isHighlighted: boolean, children: React.ReactNode }) => (
+    <motion.div
+      animate={isHighlighted ? { 
+        backgroundColor: ["rgba(255, 255, 255, 0)", "rgba(34, 211, 238, 0.4)", "rgba(255, 255, 255, 0)"],
+        scale: [1, 1.1, 1],
+        boxShadow: ["0 0 0px rgba(34, 211, 238, 0)", "0 0 15px rgba(34, 211, 238, 0.6)", "0 0 0px rgba(34, 211, 238, 0)"]
+      } : {}}
+      transition={{ duration: 1, repeat: isHighlighted ? Infinity : 0 }}
+      className={`rounded-sm flex items-center transition-all ${isHighlighted ? 'border border-cyan-400/50' : 'border border-transparent'}`}
     >
-      <Icon className={`w-3.5 h-3.5 ${colorClass}`} />
-      <span className={`font-bold text-sm md:text-base ${colorClass}`}>{value}</span>
-    </button>
+      {children}
+    </motion.div>
   );
+
+  const StatItem = ({ icon: Icon, value, tooltip, colorClass = "text-white", onClick, statKey }: { icon: any, value: string | number, tooltip: string, colorClass?: string, onClick?: () => void, statKey?: string }) => {
+    const isHighlighted = statKey ? !!highlightedStats[statKey] : false;
+    
+    return (
+      <StatHighlight isHighlighted={isHighlighted}>
+        <button 
+          className={`flex items-center gap-1.5 group outline-none ${onClick ? 'cursor-pointer hover:bg-slate-800/80 px-1.5 py-0.5 rounded transition-colors' : 'cursor-help'}`} 
+          title={tooltip}
+          onClick={onClick}
+          disabled={!onClick}
+        >
+          <Icon className={`w-3.5 h-3.5 ${colorClass}`} />
+          <span className={`font-bold text-sm md:text-base ${colorClass}`}>{value}</span>
+        </button>
+      </StatHighlight>
+    );
+  };
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 pointer-events-none select-none font-mono">
@@ -115,38 +139,54 @@ export default function UIPanel({
         <div className="flex items-center justify-between lg:justify-start lg:gap-6 w-full lg:w-auto shrink-0 gap-2">
           {/* Left Block: Hero Identity & Vitals */}
           <div className="flex items-center gap-2 md:gap-4 shrink-0">
-            {/* Hero Identity */}
-            <div className="flex flex-col animate-pulse">
+            {/* Hero Identity - Clickable to pause on mobile */}
+            <motion.button 
+              onClick={onPause}
+              disabled={!onPause}
+              whileHover={onPause ? { scale: 1.05 } : {}}
+              whileTap={onPause ? { scale: 0.95 } : {}}
+              className={`flex flex-col items-start leading-none pointer-events-auto transition-opacity ${onPause ? 'cursor-pointer hover:opacity-80 active:opacity-60' : ''}`}
+            >
               <div className="text-[9px] text-cyan-400 uppercase tracking-widest opacity-70 leading-none">
                 {getClassName()}
               </div>
               <div className="text-base md:text-lg font-black text-white italic tracking-tighter flex items-center gap-0.5">
                 <span className="text-cyan-400">LVL</span> {heroLevel}
               </div>
-            </div>
+            </motion.button>
 
             {/* Vitals Bars */}
             <div className="flex flex-col gap-1 w-24 sm:w-28 md:w-44 shrink-0">
               {/* HP Bar */}
-              <div className="relative h-3 md:h-4 bg-slate-900 border border-red-500/20 rounded-full overflow-hidden" title="Health Points">
+              <motion.div 
+                animate={highlightedStats['maxHp'] ? { boxShadow: ["0 0 10px rgba(239, 68, 68, 0.4)", "0 0 20px rgba(239, 68, 68, 0.8)", "0 0 10px rgba(239, 68, 68, 0.4)"] } : {}}
+                transition={highlightedStats['maxHp'] ? { duration: 1, repeat: Infinity } : {}}
+                className="relative h-3 md:h-4 bg-slate-900 border border-red-500/20 rounded-full overflow-hidden" 
+                title="Health Points"
+              >
                 <motion.div 
                   animate={{ width: `${hpPerc}%` }}
                   className={`h-full ${hpPerc < 30 ? 'bg-red-500 animate-pulse' : 'bg-gradient-to-r from-red-600 to-pink-500'}`}
                 />
                 <div className="absolute inset-0 flex items-center justify-center text-[7.5px] md:text-[9.5px] font-black text-white [text-shadow:_0_1px_2px_rgba(0,0,0,1),_0_1px_1px_rgba(0,0,0,1)]">
-                  {Math.ceil(hp)}/{maxHp}
+                  {Math.round(hp)}/{maxHp}
                 </div>
-              </div>
+              </motion.div>
               {/* MP Bar */}
-              <div className="relative h-3 md:h-4 bg-slate-900 border border-cyan-500/20 rounded-full overflow-hidden" title="Mana Points">
+              <motion.div 
+                animate={highlightedStats['maxMp'] ? { boxShadow: ["0 0 10px rgba(34, 211, 238, 0.4)", "0 0 20px rgba(34, 211, 238, 0.8)", "0 0 10px rgba(34, 211, 238, 0.4)"] } : {}}
+                transition={highlightedStats['maxMp'] ? { duration: 1, repeat: Infinity } : {}}
+                className="relative h-3 md:h-4 bg-slate-900 border border-cyan-500/20 rounded-full overflow-hidden" 
+                title="Mana Points"
+              >
                 <motion.div 
                   animate={{ width: `${mpPerc}%` }}
                   className="h-full bg-gradient-to-r from-cyan-600 to-blue-500"
                 />
                 <div className="absolute inset-0 flex items-center justify-center text-[7.5px] md:text-[9.5px] font-black text-white [text-shadow:_0_1px_2px_rgba(0,0,0,1),_0_1px_1px_rgba(0,0,0,1)]">
-                  {Math.ceil(mp)}/{maxMp}
+                  {Math.round(mp)}/{maxMp}
                 </div>
-              </div>
+              </motion.div>
             </div>
           </div>
 
@@ -154,7 +194,8 @@ export default function UIPanel({
           <div className="flex lg:hidden items-center gap-2.5 sm:gap-4 shrink-0 bg-slate-900/40 px-2 py-1 rounded border border-white/5">
             <StatItem icon={Coins} value={gold} colorClass="text-yellow-400" tooltip="Gold collected" />
             <StatItem icon={Skull} value={kills} colorClass="text-red-500" tooltip={language === 'it' ? "Nemici eliminati (Apri Bestiario)" : "Enemies vanquished (Open Bestiary)"} onClick={onOpenBestiary} />
-            <StatItem icon={Sword} value={strength} colorClass="text-pink-400" tooltip="Hero Strength" />
+            <StatItem icon={Trophy} value={""} colorClass="text-yellow-400" tooltip={language === 'it' ? "Trofei e Obiettivi" : "Trophies & Achievements"} onClick={onOpenTrophies} />
+            <StatItem icon={Sword} value={strength} colorClass="text-pink-400" tooltip="Hero Strength" statKey="strength" />
           </div>
         </div>
 
@@ -176,51 +217,60 @@ export default function UIPanel({
             {/* Supplementary Hero Raw Stats */}
             <div className="flex items-center gap-2 md:gap-3 text-[8.5px] md:text-[9.5px] font-black tracking-tight text-slate-400 bg-slate-900/60 border border-white/5 rounded px-2.5 py-1 justify-between lg:justify-start w-full lg:w-auto overflow-x-auto lg:overflow-x-visible shadow-[inset_0_1px_3px_rgba(0,0,0,0.4)] whitespace-nowrap [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               {/* HP Regen */}
-              <div className="flex items-center gap-0.5 text-rose-400 shrink-0" title={language === 'it' ? 'Rigenerazione HP al secondo' : 'HP Regen per second'}>
-                <span className="text-[10px]">❤️</span>
-                <span>{hpRegenPerSec}/s</span>
-              </div>
+              <StatHighlight isHighlighted={!!highlightedStats['hpRegen']}>
+                <div className="flex items-center gap-0.5 text-rose-400 shrink-0 px-1" title={language === 'it' ? 'Rigenerazione HP al secondo' : 'HP Regen per second'}>
+                  <span className="text-[10px]">❤️</span>
+                  <span>{hpRegenPerSec}/s</span>
+                </div>
+              </StatHighlight>
               
               {/* Mana Regen */}
-              <div className="flex items-center gap-0.5 text-cyan-400 shrink-0" title={language === 'it' ? 'Rigenerazione Mana al secondo (Boost)' : 'Mana Regen per second (Boost)'}>
-                <span className="text-[10px]">⚡</span>
-                <span>{manaRegenPerSec}/s{mpRegenBoost > 0 ? ` (+${mpRegenBoost}%)` : ''}</span>
-              </div>
+              <StatHighlight isHighlighted={!!highlightedStats['mpRegenBoost']}>
+                <div className="flex items-center gap-0.5 text-cyan-400 shrink-0 px-1" title={language === 'it' ? 'Rigenerazione Mana al secondo (Boost)' : 'Mana Regen per second (Boost)'}>
+                  <span className="text-[10px]">⚡</span>
+                  <span>{manaRegenPerSec}/s{mpRegenBoost > 0 ? ` (+${parseFloat(mpRegenBoost.toFixed(1))}%)` : ''}</span>
+                </div>
+              </StatHighlight>
 
               {/* Defense */}
-              <div className="flex items-center gap-0.5 text-slate-300 shrink-0" title={language === 'it' ? 'Difesa' : 'Defense'}>
-                <span className="text-[10px]">🛡️</span>
-                <span>{defense}</span>
-              </div>
+              <StatHighlight isHighlighted={!!highlightedStats['defense']}>
+                <div className="flex items-center gap-0.5 text-slate-300 shrink-0 px-1" title={language === 'it' ? 'Difesa' : 'Defense'}>
+                  <span className="text-[10px]">🛡️</span>
+                  <span>{defense}</span>
+                </div>
+              </StatHighlight>
 
               {/* Critical Rate */}
-              <div className="flex items-center gap-0.5 text-amber-500 shrink-0" title={language === 'it' ? 'Probabilità di colpo critico' : 'Critical hit chance'}>
-                <span className="text-[10px]">🎯</span>
-                <span>{critPercent}%</span>
-              </div>
+              <StatHighlight isHighlighted={!!highlightedStats['critChance']}>
+                <div className="flex items-center gap-0.5 text-amber-500 shrink-0 px-1" title={language === 'it' ? 'Probabilità di colpo critico' : 'Critical hit chance'}>
+                  <span className="text-[10px]">🎯</span>
+                  <span>{critPercent}%</span>
+                </div>
+              </StatHighlight>
 
               {/* Cooldown Reduction (CDR) */}
-              {cdrPercent > 0 && (
-                <div className="flex items-center gap-0.5 text-purple-400 shrink-0" title={language === 'it' ? 'Riduzione tempo di ricarica' : 'Cooldown reduction'}>
+              <StatHighlight isHighlighted={!!highlightedStats['cooldownReduction']}>
+                <div className="flex items-center gap-0.5 text-purple-400 shrink-0 px-1" title={language === 'it' ? 'Riduzione tempo di ricarica' : 'Cooldown reduction'}>
                   <span className="text-[10px]">⏳</span>
                   <span>{cdrPercent}%</span>
                 </div>
-              )}
+              </StatHighlight>
 
               {/* Attack Speed (AS) */}
-              {asPercent > 0 && (
-                <div className="flex items-center gap-0.5 text-emerald-400 shrink-0" title={language === 'it' ? 'Velocità Attacco Fisico' : 'Attack speed bonus'}>
+              <StatHighlight isHighlighted={!!highlightedStats['attackSpeed']}>
+                <div className="flex items-center gap-0.5 text-emerald-400 shrink-0 px-1" title={language === 'it' ? 'Velocità Attacco Fisico' : 'Attack speed bonus'}>
                   <span className="text-[10px]">⚔️</span>
-                  <span>+{asPercent}%</span>
+                  <span>{asPercent > 0 ? `+${asPercent}%` : '0%'}</span>
                 </div>
-              )}
+              </StatHighlight>
             </div>
 
             {/* Stats Flex Container */}
             <div className="hidden lg:flex items-center gap-4 shrink-0">
               <StatItem icon={Coins} value={gold} colorClass="text-yellow-400" tooltip="Gold collected" />
               <StatItem icon={Skull} value={kills} colorClass="text-red-500" tooltip={language === 'it' ? "Nemici eliminati (Apri Bestiario)" : "Enemies vanquished (Open Bestiary)"} onClick={onOpenBestiary} />
-              <StatItem icon={Sword} value={strength} colorClass="text-pink-400" tooltip="Hero Strength" />
+              <StatItem icon={Trophy} value={""} colorClass="text-yellow-400" tooltip={language === 'it' ? "Trofei e Obiettivi" : "Trophies & Achievements"} onClick={onOpenTrophies} />
+              <StatItem icon={Sword} value={strength} colorClass="text-pink-400" tooltip="Hero Strength" statKey="strength" />
             </div>
           </div>
 
@@ -258,7 +308,7 @@ export default function UIPanel({
         />
         <div className="absolute inset-0 flex items-center justify-center">
           <span className="text-[10px] md:text-xs font-black text-white mix-blend-difference tracking-[0.2em]">
-            {Math.floor(exp)} / {nextExp}
+            {Math.round(exp)} / {nextExp}
           </span>
         </div>
       </div>

@@ -50,6 +50,29 @@
   100% { text-shadow: 0 0 10px #ecc94b, 0 0 20px #ecc94b; color: #fff; }
 }
 
+@keyframes scanlineMove {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.scanline-overlay {
+  background: linear-gradient(
+    rgba(18, 16, 16, 0) 50%,
+    rgba(0, 0, 0, 0.12) 50%
+  ), linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.02),
+    rgba(0, 255, 0, 0.01),
+    rgba(0, 0, 255, 0.02)
+  );
+  background-size: 100% 3px, 3px 100%;
+}
+
+.scanline-animation {
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0) 0%, rgba(255, 255, 255, 0.02) 10%, rgba(0, 0, 0, 0) 20%);
+  animation: scanlineMove 8s linear infinite;
+}
+
 @keyframes slotSpin {
   0% { transform: translateY(0); }
   100% { transform: translateY(-50%); }

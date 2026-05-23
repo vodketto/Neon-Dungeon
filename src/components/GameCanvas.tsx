@@ -1,8 +1,8 @@
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import seedrandom from 'seedrandom';
 import { generateDungeon, Room } from '../lib/dungeonGenerator';
-import { Settings, Keyboard, ArrowRight, Shield, Swords, Zap, Heart, Coins, Trophy, X } from 'lucide-react';
+import { Settings, Keyboard, ArrowRight, Shield, Swords, Zap, Heart, Coins, Trophy, X, Save, Trash2 } from 'lucide-react';
 import { WEAPONS } from '../game/weapons';
 import { RELICS } from '../game/relics';
 import { ENEMY_NAMES, ENEMY_PIXEL_ARTS } from '../game/enemies';
@@ -13,6 +13,8 @@ import { GameSettings, HeroClass } from './StartScreen';
 import ShopUI from './ShopUI';
 import UIPanel from './UIPanel';
 import BestiaryUI from './BestiaryUI';
+import { TrophiesUI } from './TrophiesUI';
+import { TROPHIES } from '../game/trophies';
 import SkillTreeUI from './SkillTreeUI';
 import LevelUpSlotMachineUI from './LevelUpSlotMachineUI';
 
@@ -39,6 +41,32 @@ function getEnemyDefense(type: Enemy['type']): { physicalDefense: number, magica
         case 'teleporter': return { physicalDefense: 0, magicalDefense: 40 };
         default: return { physicalDefense: 0, magicalDefense: 0 };
     }
+}
+
+function getBossName(type: string, lang: 'it' | 'en' = 'it'): string {
+    const names: Record<string, { it: string, en: string }> = {
+        boss: {
+            it: 'GOLEM DI NEON 🤖',
+            en: 'NEON GOLEM 🤖'
+        },
+        slimmy: {
+            it: 'RE SLIME 👑',
+            en: 'KING SLIME 👑'
+        },
+        serpent: {
+            it: 'ANTICO SERPENTE 🐉',
+            en: 'ELDER SERPENT 🐉'
+        },
+        shadow_reaper: {
+            it: 'MIETITORE D\'OMBRE 💀',
+            en: 'SHADOW REAPER 💀'
+        },
+        void_architect: {
+            it: 'ARCHITETTO DEL VUOTO 🌀',
+            en: 'VOID ARCHITECT 🌀'
+        }
+    };
+    return names[type]?.[lang] || (lang === 'it' ? 'BOSS SUPREMO' : 'SUPREME BOSS');
 }
 
 interface Enemy {
@@ -75,6 +103,7 @@ interface Enemy {
     evadeDirY?: number;
     dir?: 'up' | 'down' | 'left' | 'right';
     jumpTimer?: number;
+    roomId?: number;
     jumpTargetX?: number;
     jumpTargetY?: number;
     z?: number; // Vertical height for jump
@@ -88,6 +117,13 @@ interface Enemy {
     losCheckTimer?: number;
     lastLos?: boolean;
     serpentDashTimer?: number;
+    fuseTimer?: number;
+    isIgnited?: boolean;
+    isDeadFuse?: boolean;
+    isDeadFuseTriggered?: boolean;
+    harpoonedDuration?: number;
+    isRocketTrapped?: boolean;
+    rocketTimer?: number;
 }
 
 interface LootItem {
@@ -142,6 +178,7 @@ interface Projectile {
     isLaser?: boolean;
     isIceCrystal?: boolean;
     size?: number;
+    isLegendaryStar?: boolean;
 }
 
 interface Particle {
@@ -161,6 +198,7 @@ interface Particle {
     text?: string;
     fontSize?: number;
     noGravity?: boolean;
+    active?: boolean;
 }
 
 interface Corpse {
@@ -242,7 +280,7 @@ function getExpFromMob(mobLevel: number, playerLevel: number, extraXpPct: number
     return Math.floor(xp * (1 + extraXpPct / 100) * expMult);
 }
 
-export default function GameCanvas({ settings, heroClass, onExit }: { settings: GameSettings, heroClass: HeroClass, onExit?: () => void }) {
+export default function GameCanvas({ settings, heroClass, onExit, onLoadSlot }: { settings: GameSettings, heroClass: HeroClass, onExit?: () => void, onLoadSlot?: (saveData: any) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const settingsRef = useRef(settings);
   
@@ -251,10 +289,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
     gold: 0, score: 0, kills: 0, initialEnemies: 0, 
     physicalWeapon: 'Spada Base', physicalWeaponRarity: 'common', physicalStacks: 1, 
     magicWeapon: 'Bacchetta Base', magicWeaponRarity: 'common', magicStacks: 1, 
-    strength: 6, mpRegenBoost: 0, extraGoldPct: 0, extraXpGainPct: 0, 
+    strength: 6, magicPower: 6, mpRegenBoost: 0, extraGoldPct: 0, extraXpGainPct: 0, 
     dungeonLevel: settings.startLevel || 1, critChance: 0.05, 
     skillPoints: 0, 
-    hpLevel: 0, mpLevel: 0, strLevel: 0, mpRegenLevel: 0, speedLevel: 0,
+    hpLevel: 0, mpLevel: 0, strLevel: 0, magicLevel: 0, mpRegenLevel: 0, speedLevel: 0,
     // Skill Tree Stats
     defense: 0,
     hpRegen: 0,
@@ -267,12 +305,67 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
     skillLevels: {} as Record<string, number>,
     pendingShopWeapons: [] as any[],
     relics: [] as any[],
-    bestiaryKills: {} as Record<string, number>
+    bestiaryKills: {} as Record<string, number>,
+    // Trophy Stats
+    ratsKilled: 0,
+    itemsCollected: 0,
+    noHitStreak: 0,
+    secretRoomsFound: 0,
+    electricBossKills: 0,
+    roomsCleared: 0,
+    rareDropsCollected: 0,
+    jukeboxesUsed: 0,
+    weaponsCollected: 0,
+    weaponsUpgraded: 0,
+    unlockedTrophies: [] as string[]
   });
   const activeSeed = useRef(settings.seed || Math.random().toString(36).substring(7));
+  // Keep the seed synchronized inside settingsRef for robust continue and saves
+  settingsRef.current.seed = activeSeed.current;
+
   const startTime = useRef(Date.now());
+  const hasLoaded = useRef(false);
+  const [autosaveEnabled, setAutosaveEnabled] = useState(() => localStorage.getItem('autosave_enabled') !== 'false');
+
+  useEffect(() => {
+      const saved = localStorage.getItem('player_stats');
+      if (saved) {
+           stats.current = JSON.parse(saved);
+           const savedTrophies = localStorage.getItem('unlocked_trophies');
+           if (savedTrophies) {
+             stats.current.unlockedTrophies = JSON.parse(savedTrophies);
+           }
+          hasLoaded.current = true;
+      }
+      localStorage.setItem('game_interrupted', 'true');
+  }, []);
+  
+  const saveGameState = useCallback(() => {
+      if (!isGameOver.current && autosaveEnabled) {
+          try {
+              localStorage.setItem('player_stats', JSON.stringify(stats.current));
+              localStorage.setItem('unlocked_trophies', JSON.stringify(stats.current.unlockedTrophies));
+              
+              // Keep settings seed up to date and save it
+              settingsRef.current.seed = activeSeed.current;
+              localStorage.setItem('neonDungeonSettings', JSON.stringify(settingsRef.current));
+              
+              localStorage.setItem('game_interrupted', 'true');
+          } catch (e) {
+              console.error('Failed to autosave game state:', e);
+          }
+      }
+  }, [autosaveEnabled]);
   
   useEffect(() => {
+      const interval = setInterval(() => {
+          saveGameState();
+      }, 240000);
+      return () => clearInterval(interval);
+  }, [saveGameState]);
+  
+  useEffect(() => {
+    if (hasLoaded.current) return;
     if (heroClass === 'mage') {
       stats.current = { ...stats.current, hp: 80, maxHp: 80, strength: 4, critChance: 0.05, magicWeapon: 'Bacchetta Bastarda', defense: 0, hpRegen: 2, critDamage: 1.8, cooldownReduction: 0.1 };
     } else if (heroClass === 'paladin') {
@@ -359,6 +452,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
   const dungeon = useRef(initialDungeon.grid);
   const rooms = useRef<Room[]>(initialDungeon.rooms);
   const revealedRooms = useRef<Set<number>>(new Set());
+  const clearedRoomIndices = useRef<Set<number>>(new Set());
   const triggeredAmbushes = useRef<Set<number>>(new Set());
   const merchants = useRef<{x: number, y: number, roomId: number}[]>([]);
   const exploredTiles = useRef<Set<string>>(new Set());
@@ -391,7 +485,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
   const startY = initialDungeon.rooms[0].cy * GRID_SIZE + GRID_SIZE / 2;
   const player = useRef({ x: startX, y: startY, facing: 'down', aimAngle: Math.PI / 2, magicCd: 0, attackCd: 0, lastAttackTime: 0, lastPickupTime: 0, flashTimer: 0, chargeTimer: 0, isDraining: false, currentAttackHitIds: new Set<number>(), harpoonedEnemyId: null as null | number, burstCount: 0, burstTimer: 0, vx: 0, vy: 0, dashTimer: 0, dashCd: 0, dashDirX: 0, dashDirY: 0, comboCount: 0, lastHitTime: 0 });
   const killerRef = useRef<{ type: Enemy['type'], level: number, damage?: number } | null>(null);
-  const lastHitMobRef = useRef<{ type: Enemy['type'], level: number, id?: number, maxHp?: number } | null>(null);
+  const lastHitMobRef = useRef<{ type: Enemy['type'], level: number, id?: number, maxHp?: number, hitTime?: number, deathTime?: number | null } | null>(null);
   const lastPhysPressed = useRef(false);
   const nearbyWeaponRef = useRef<string | null>(null);
 
@@ -538,6 +632,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                               hp: mbHp, maxHp: mbHp, size: 28, type: 'miniboss', speed: 0.7 * speedMult,
                               baseType: base,
                               level: mbLevel,
+                              roomId: roomIdx + 1,
                               state: 'patrol', targetX: mbX, targetY: mbY,
                               attackCd: 0,
                               dir: 'down', lastX: mbX, lastY: mbY, stuckTimer: 0,
@@ -556,6 +651,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                   x: fX, y: fY,
                                   hp: fHp, maxHp: fHp, size: 18, type: fType, speed: 1.2 * speedMult,
                                   level: fLevel,
+                                  roomId: roomIdx + 1,
                                   state: 'patrol', targetX: fX, targetY: fY,
                                   attackCd: 0,
                                   dir: 'down', lastX: fX, lastY: fY, stuckTimer: 0,
@@ -572,6 +668,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                   y: startY,
                   hp, maxHp: hp, size, type, speed,
                   level: mobLevel,
+                  roomId: roomIdx + 1,
                   segments: type === 'serpent' ? Array(12).fill({x: startX, y: startY}) : undefined,
                   state: 'patrol', targetX: startX, targetY: startY,
                   attackCd: 0, spawnTimer: type === 'nest' ? 5 * 60 : 0,
@@ -613,14 +710,109 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
       }
       return enemies.current.filter(e => e.hp > 0).length < 100; // Cap alive normal/miniboss mobs to 100
   };
+
+  // Helper to find a safe spot around a source (nest, necromancer, etc)
+  const findSafeSpawnPosition = (sourceX: number, sourceY: number, size: number, minRadius: number = 30, maxRadius: number = 50) => {
+      for (let attempt = 0; attempt < 15; attempt++) {
+          const angle = Math.random() * Math.PI * 2;
+          const r = minRadius + Math.random() * (maxRadius - minRadius);
+          const sx = sourceX + Math.cos(angle) * r;
+          const sy = sourceY + Math.sin(angle) * r;
+          
+          if (!pointInWall(sx, sy)) {
+              const overlap = enemies.current.some(other => 
+                  other.hp > 0 && Math.hypot(sx - other.x, sy - other.y) < (size + other.size + 8)
+              );
+              if (!overlap) return { x: sx, y: sy };
+          }
+      }
+      return null;
+  };
+
   const pets = useRef<Pet[]>([]);
   const corpses = useRef<Corpse[]>([]);
   const chests = useRef(initialDungeon.chests);
   stats.current.initialEnemies = enemies.current.length;
   const loot = useRef<LootItem[]>([]);
   const projectiles = useRef<Projectile[]>([]); // Define projectiles
+  const nextParticleIndex = useRef(0);
   const particles = useRef<Particle[]>([]);
-  const damagePopups = useRef<{id: number, x: number, y: number, value: number, alpha: number, startTime: number, color: string, isCritical: boolean}[]>([]);
+  if (particles.current.length === 0) {
+      const arr: Particle[] = Array.from({ length: 3000 }, () => ({
+          x: 0,
+          y: 0,
+          vx: 0,
+          vy: 0,
+          life: 0,
+          maxLife: 0,
+          color: '',
+          size: 0,
+          targetX: undefined,
+          targetY: undefined,
+          type: undefined,
+          rotation: undefined,
+          vr: undefined,
+          text: undefined,
+          fontSize: undefined,
+          noGravity: false,
+          active: false
+      }));
+      (arr as any).push = (props: Partial<Particle> | Particle) => {
+          let found = false;
+          const len = arr.length;
+          for (let i = 0; i < len; i++) {
+              const idx = (nextParticleIndex.current + i) % len;
+              const p = arr[idx];
+              if (!p.active) {
+                  p.x = props.x ?? 0;
+                  p.y = props.y ?? 0;
+                  p.vx = props.vx ?? 0;
+                  p.vy = props.vy ?? 0;
+                  p.life = props.life ?? 0;
+                  p.maxLife = props.maxLife ?? 0;
+                  p.color = props.color ?? '';
+                  p.size = props.size ?? 0;
+                  p.targetX = props.targetX;
+                  p.targetY = props.targetY;
+                  p.type = props.type;
+                  p.rotation = props.rotation;
+                  p.vr = props.vr;
+                  p.text = props.text;
+                  p.fontSize = props.fontSize;
+                  p.noGravity = props.noGravity ?? false;
+                  p.active = true;
+                  nextParticleIndex.current = (idx + 1) % len;
+                  found = true;
+                  break;
+              }
+          }
+          if (!found) {
+              const idx = nextParticleIndex.current;
+              const p = arr[idx];
+              p.x = props.x ?? 0;
+              p.y = props.y ?? 0;
+              p.vx = props.vx ?? 0;
+              p.vy = props.vy ?? 0;
+              p.life = props.life ?? 0;
+              p.maxLife = props.maxLife ?? 0;
+              p.color = props.color ?? '';
+              p.size = props.size ?? 0;
+              p.targetX = props.targetX;
+              p.targetY = props.targetY;
+              p.type = props.type;
+              p.rotation = props.rotation;
+              p.vr = props.vr;
+              p.text = props.text;
+              p.fontSize = props.fontSize;
+              p.noGravity = props.noGravity ?? false;
+              p.active = true;
+              nextParticleIndex.current = (idx + 1) % len;
+          }
+          return len;
+      };
+      particles.current = arr;
+  }
+  const damagePopups = useRef<{id: number, x: number, y: number, value: number | string, alpha: number, startTime: number, color: string, isCritical: boolean}[]>([]);
 
   const getMitigatedDamage = (rawDmg: number) => {
       const def = stats.current.defense || 0;
@@ -759,7 +951,11 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
       levelMessage.current = { text: titleText, timer: 150 };
   };
 
-  const spawnDamagePopup = (x: number, y: number, value: number, enemy: Enemy, isCritical: boolean, customColor?: string) => {
+  const spawnDamagePopup = (x: number, y: number, value: number | string, enemy: Enemy, isCritical: boolean, customColor?: string) => {
+    let finalValue = value;
+    if (typeof value === 'number' && isNaN(value)) {
+        finalValue = 'Boom';
+    }
     let color = customColor || '#ffffff';
     if (!customColor) {
         switch (enemy.type) {
@@ -795,7 +991,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         }
     }
     
-    damagePopups.current.push({ id: Math.random(), x, y, value, alpha: 1.0, startTime: Date.now(), color, isCritical });
+    damagePopups.current.push({ id: Math.random(), x, y, value: finalValue, alpha: 1.0, startTime: Date.now(), color, isCritical });
   };
 
   const spawnPlayerDamagePopup = (value: number) => {
@@ -861,8 +1057,17 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
   };
   
   // Corpse drawing logic
-  const drawCorpses = (ctx: CanvasRenderingContext2D) => {
+  const drawCorpses = (ctx: CanvasRenderingContext2D, cx: number, cy: number, canvasWidth: number, canvasHeight: number) => {
       corpses.current.forEach((c) => {
+          // Offscreen culling check
+          const screenX = c.x + cx;
+          const screenY = c.y + cy;
+          const size = 30;
+          if (screenX < -size || screenX > canvasWidth + size ||
+              screenY < -size || screenY > canvasHeight + size) {
+              return;
+          }
+
           ctx.save();
           ctx.translate(c.x, c.y);
           ctx.rotate(Math.PI / 2);
@@ -916,6 +1121,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
   };
    
   const initLevel = (level: number, keepSeed: boolean = false) => {
+      saveGameState();
       // Sustainable growth: growth slows down after level 100
       const growthFactor = level > 100 ? 0.5 : 1.0;
       const effectiveLevel = level > 100 ? 100 + (level - 100) * 0.2 : level;
@@ -926,12 +1132,14 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
       if (!keepSeed) {
         activeSeed.current = Math.random().toString(36).substring(7); 
       }
+      settingsRef.current.seed = activeSeed.current;
       
       const newDungeon = generateDungeon(width, height, level, activeSeed.current);
       currentDungeon.current = newDungeon;
       dungeon.current = newDungeon.grid;
       rooms.current = newDungeon.rooms;
       revealedRooms.current = new Set();
+      clearedRoomIndices.current = new Set();
       triggeredAmbushes.current = new Set();
       activeAmbush.current = null;
       exploredTiles.current = new Set();
@@ -1001,7 +1209,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
       }
 
       projectiles.current = [];
-      particles.current = [];
+      particles.current.forEach(p => p.active = false);
       corpses.current = [];
       damagePopups.current = [];
       keys.current = {}; 
@@ -1102,23 +1310,230 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
   const [showLevelUpText, setShowLevelUpText] = useState(false);
   const [showBestiary, setShowBestiary] = useState(false);
+  const [showTrophies, setShowTrophies] = useState(false);
 
   useEffect(() => {
     if (showShop) {
       audio.playShopMusic();
+      saveGameState();
     } else {
       audio.stopShopMusic();
     }
-  }, [showShop]);
+  }, [showShop, saveGameState]);
+  useEffect(() => {
+    const timer = setInterval(() => {
+        const now = Date.now();
+        setActiveTrackers(prev => {
+            const next = { ...prev };
+            let changed = false;
+            for (const id in next) {
+                if (now - next[id] > 4000) {
+                    delete next[id];
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
   const [isPaused, setIsPaused] = useState(false);
   const [showOptions, setShowOptions] = useState<any>(false);
   const [showStats, setShowStats] = useState(false);
+  const [activeBoss, setActiveBoss] = useState<{ id: number | string; type: string; hp: number; maxHp: number } | null>(null);
   const [hudStats, setHudStats] = useState(() => stats.current);
+  const [activeTrackers, setActiveTrackers] = useState<Record<string, number>>({});
+  const lastShownStep = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    const initialSteps: Record<string, number> = {};
+    TROPHIES.forEach(t => {
+      const currentVal = (stats.current as any)[t.statKey] || 0;
+      const targetVal = t.targetValue;
+      if (targetVal > 0) {
+        initialSteps[t.id] = Math.floor(((currentVal / targetVal) * 100) / 10);
+      } else {
+        initialSteps[t.id] = 0;
+      }
+    });
+    lastShownStep.current = initialSteps;
+  }, []);
+
+  const showTrophyProgress = (trophyId: string) => {
+    const trophy = TROPHIES.find(t => t.id === trophyId);
+    if (!trophy) return;
+
+    const current = (stats.current as any)[trophy.statKey] || 0;
+    const target = trophy.targetValue;
+    if (target <= 0) return;
+
+    const percent = (current / target) * 100;
+    const currentStep = Math.floor(percent / 10); // 0 to 10
+
+    // Lazy initialization if not exists
+    if (lastShownStep.current[trophyId] === undefined) {
+        lastShownStep.current[trophyId] = currentStep;
+        return;
+    }
+
+    if (currentStep > lastShownStep.current[trophyId] && currentStep < 10) {
+        lastShownStep.current[trophyId] = currentStep;
+        setActiveTrackers(prev => ({
+            ...prev,
+            [trophyId]: Date.now()
+        }));
+    }
+  };
+
+  const checkTrophies = () => {
+    const st = stats.current;
+    
+    // Total Kills
+    if (st.kills >= 200 && !st.unlockedTrophies.includes('synthwave_slayer')) {
+        st.unlockedTrophies.push('synthwave_slayer');
+        levelMessage.current = { text: "SBLOCCATO: Ammazzasynthwave!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+    
+    // Rats (Skeletons)
+    if (st.ratsKilled >= 50 && !st.unlockedTrophies.includes('rat_slayer')) {
+        st.unlockedTrophies.push('rat_slayer');
+        levelMessage.current = { text: "SBLOCCATO: Ratti Laser!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Items
+    if (st.itemsCollected >= 100 && !st.unlockedTrophies.includes('loot_goblin')) {
+        st.unlockedTrophies.push('loot_goblin');
+        levelMessage.current = { text: "SBLOCCATO: Supremo Goblin!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Streak
+    if (st.noHitStreak >= 20 && !st.unlockedTrophies.includes('photon_ninja')) {
+        st.unlockedTrophies.push('photon_ninja');
+        levelMessage.current = { text: "SBLOCCATO: Ninja del Fotone!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Rooms Cleared
+    if (st.roomsCleared >= 10 && !st.unlockedTrophies.includes('pixel_survivor')) {
+        st.unlockedTrophies.push('pixel_survivor');
+        levelMessage.current = { text: "SBLOCCATO: Sopravvissuto Pixel!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Rare Drops
+    if (st.rareDropsCollected >= 50 && !st.unlockedTrophies.includes('cyber_collector')) {
+        st.unlockedTrophies.push('cyber_collector');
+        levelMessage.current = { text: "SBLOCCATO: Collezionista Cyber!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Secret Rooms
+    if (st.secretRoomsFound >= 10 && !st.unlockedTrophies.includes('neon_archivist')) {
+        st.unlockedTrophies.push('neon_archivist');
+        levelMessage.current = { text: "SBLOCCATO: Archivista del Neon!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Electric Boss
+    if (st.electricBossKills >= 1 && !st.unlockedTrophies.includes('circuit_breaker')) {
+        st.unlockedTrophies.push('circuit_breaker');
+        levelMessage.current = { text: "SBLOCCATO: Interruttore Circuiti!", timer: 120 };
+        audio.playSecretRoomSound();
+    }
+
+    // Weapon Master
+    if (st.weaponsCollected >= 25 && !st.unlockedTrophies.includes('weapon_master')) {
+        st.unlockedTrophies.push('weapon_master');
+        levelMessage.current = { 
+            text: settingsRef.current.language === 'it' 
+                ? "SBLOCCATO: Maestro d'Armi!" 
+                : "UNLOCKED: Weapon Master!", 
+            timer: 120 
+        };
+        audio.playSecretRoomSound();
+    }
+
+    // Upgrade Me
+    if (st.weaponsUpgraded >= 10 && !st.unlockedTrophies.includes('upgrade_me')) {
+        st.unlockedTrophies.push('upgrade_me');
+        levelMessage.current = { 
+            text: settingsRef.current.language === 'it' 
+                ? "SBLOCCATO: Potenziami!" 
+                : "UNLOCKED: Upgrade Me!", 
+            timer: 120 
+        };
+        audio.playSecretRoomSound();
+    }
+  };
   
+  const [highlightedStats, setHighlightedStats] = useState<Record<string, boolean>>({});
+  const lastStatsRef = useRef({ ...stats.current });
+
   // Update HUD state periodically for React components
   useEffect(() => {
     const interval = setInterval(() => {
-      setHudStats({ ...stats.current });
+      const currentStats = { ...stats.current };
+      
+      // Detect permanent stat increases
+      const trackedKeys = [
+        'strength', 'maxHp', 'maxMp', 'defense', 
+        'hpRegen', 'mpRegenBoost', 'critChance', 
+        'cooldownReduction', 'attackSpeed'
+      ] as const;
+
+      const newHighlights: Record<string, boolean> = { ...highlightedStats };
+      let changed = false;
+
+      trackedKeys.forEach(key => {
+        if ((currentStats[key] as number) > (lastStatsRef.current[key] as number)) {
+          newHighlights[key] = true;
+          changed = true;
+          
+          // Clear after 3 seconds
+          setTimeout(() => {
+            setHighlightedStats(prev => {
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+          }, 3000);
+        }
+      });
+
+      if (changed) {
+        setHighlightedStats(newHighlights);
+      }
+
+      lastStatsRef.current = currentStats;
+      setHudStats(currentStats);
+      
+      const bossRoomIdx = currentDungeon.current?.bossRoomIdx;
+      const bRoom = (bossRoomIdx !== undefined && rooms.current) ? rooms.current[bossRoomIdx] : null;
+      const isPlayerInBossRoom = bRoom && 
+          player.current &&
+          player.current.x >= bRoom.x * GRID_SIZE && 
+          player.current.x <= (bRoom.x + bRoom.w) * GRID_SIZE &&
+          player.current.y >= bRoom.y * GRID_SIZE && 
+          player.current.y <= (bRoom.y + bRoom.h) * GRID_SIZE;
+
+      const boss = isPlayerInBossRoom 
+          ? enemies.current.find(e => e.hp > 0 && (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect'))
+          : null;
+
+      if (boss) {
+        setActiveBoss({
+          id: boss.id,
+          type: boss.type,
+          hp: boss.hp,
+          maxHp: boss.maxHp
+        });
+      } else {
+        setActiveBoss(null);
+      }
     }, 100);
     return () => {
       clearInterval(interval);
@@ -1285,6 +1700,12 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
   const toggleShowFps = () => {
       settingsRef.current.showFps = !settingsRef.current.showFps;
+      localStorage.setItem('neonDungeonSettings', JSON.stringify(settingsRef.current));
+      setRenderTrigger(prev => prev + 1);
+  };
+
+  const toggleScanlines = () => {
+      settingsRef.current.scanlines = !settingsRef.current.scanlines;
       localStorage.setItem('neonDungeonSettings', JSON.stringify(settingsRef.current));
       setRenderTrigger(prev => prev + 1);
   };
@@ -1494,6 +1915,20 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
     const registerEnemyKill = (e: Enemy) => {
         if (e.hp > 0) return; // Safety
         
+        // Intercept bomber death on first hit: remains dead on floor, explodes after 2 seconds
+        if (e.type === 'bomber' && !e.isDeadFuse && !e.isDeadFuseTriggered) {
+            e.hp = -1; // keep it dead but in the active enemies array
+            e.isDeadFuse = true;
+            e.isDeadFuseTriggered = true;
+            e.isIgnited = true;
+            e.fuseTimer = 120; // 2 seconds at 60fps
+            e.speed = 0; // stop moving
+            if (audio.playBossCharge) {
+                audio.playBossCharge();
+            }
+            return;
+        }
+        
         let scoreGain = 0;
         const isBoss = e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect';
         
@@ -1504,10 +1939,59 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         stats.current.score += scoreGain;
         stats.current.exp += getExpFromMob(e.level || 1, stats.current.lvl, stats.current.extraXpGainPct, settingsRef.current.difficulty || 3);
         stats.current.kills++;
+        if (stats.current.kills % 25 === 0) showTrophyProgress('synthwave_slayer');
+        stats.current.noHitStreak++;
+        if (stats.current.noHitStreak % 5 === 0) showTrophyProgress('photon_ninja');
         
+        if (e.type === 'skeleton') {
+            stats.current.ratsKilled++;
+            showTrophyProgress('rat_slayer');
+        }
+
         if (!stats.current.bestiaryKills) (stats.current as any).bestiaryKills = {};
         const bKills = (stats.current as any).bestiaryKills;
         bKills[e.type] = (bKills[e.type] || 0) + 1;
+
+        // Room Clearance Logic
+        if (e.roomId !== undefined && !clearedRoomIndices.current.has(e.roomId)) {
+            const enemiesInRoom = enemies.current.filter(other => other.id !== e.id && other.hp > 0 && other.roomId === e.roomId);
+            if (enemiesInRoom.length === 0) {
+                clearedRoomIndices.current.add(e.roomId);
+                const roomObj = rooms.current?.[e.roomId];
+                if (roomObj && roomObj.isStanza) {
+                    const isPlayerInRoom = player.current &&
+                        player.current.x >= roomObj.x * GRID_SIZE &&
+                        player.current.x <= (roomObj.x + roomObj.w) * GRID_SIZE &&
+                        player.current.y >= roomObj.y * GRID_SIZE &&
+                        player.current.y <= (roomObj.y + roomObj.h) * GRID_SIZE;
+
+                    if (isPlayerInRoom) {
+                        const goldReward = 20 + stats.current.dungeonLevel * 5;
+                        const xpReward = 50 + stats.current.dungeonLevel * 10;
+                        stats.current.gold += goldReward;
+                        stats.current.exp += xpReward;
+                        stats.current.roomsCleared = (stats.current.roomsCleared || 0) + 1;
+                        showTrophyProgress('pixel_survivor');
+                        levelMessage.current = { 
+                            text: settingsRef.current.language === 'it' 
+                                ? `STANZA PULITA! (+${goldReward} ORO, +${xpReward} XP)` 
+                                : `ROOM CLEARED! (+${goldReward} Gold, +${xpReward} XP)`, 
+                            timer: 150 
+                        };
+                        audio.playSecretRoomSound(); 
+                    } else {
+                        levelMessage.current = {
+                            text: settingsRef.current.language === 'it'
+                                ? `STANZA LIBERATA DALL'ESTERNO! (Nessun premio)`
+                                : `ROOM CLEARED FROM OUTSIDE! (No reward)`,
+                            timer: 150
+                        };
+                    }
+                }
+            }
+        }
+
+        checkTrophies();
 
         if (stats.current.soulSourceRegen) {
             stats.current.mp = Math.min(stats.current.maxMp, stats.current.mp + stats.current.soulSourceRegen);
@@ -1524,6 +2008,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
         if (isBoss) {
             bossKilled.current = true;
+            if (stats.current.physicalWeapon === 'thunder_hammer') {
+                stats.current.electricBossKills++;
+                showTrophyProgress('circuit_breaker');
+            }
         }
 
         // Particle Explosion
@@ -1549,6 +2037,12 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
     const calculateEnemyDamage = (e: Enemy, rawDmg: number, isPlayer: boolean = true, sourceLvl?: number) => {
         if (e.hp <= 0) return 0;
         
+        let dmg = rawDmg;
+        // Mastery Bonus: +1% damage for 50+ kills of this specific enemy type
+        if (isPlayer && (stats.current.bestiaryKills?.[e.type] || 0) >= 50) {
+            dmg *= 1.01;
+        }
+
         // Base boss resistance
         let multiplier = (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect') ? 0.5 : 1.0;
         if (e.type === 'miniboss') multiplier = 0.7;
@@ -1569,7 +2063,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             finalMultiplier *= boost;
             
             // Stagger/Falling logic for bosses
-            if (isPlayer && (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect') && (rawDmg * finalMultiplier > e.maxHp * 0.03)) {
+            if (isPlayer && (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect') && (dmg * finalMultiplier > e.maxHp * 0.03)) {
                 // If hitting for more than 3% of max HP, stagger the boss
                 e.stunTimer = Math.min(240, (e.stunTimer || 0) + 40); // Boss falls!
                 
@@ -1584,7 +2078,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 }
                 
                 // If very high impact, play extra sound
-                if (rawDmg * finalMultiplier > e.maxHp * 0.1) {
+                if (dmg * finalMultiplier > e.maxHp * 0.1) {
                     audio.playImpactSound();
                 }
             }
@@ -1594,7 +2088,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             finalMultiplier *= penalty;
         }
 
-        let calculatedDmg = rawDmg * finalMultiplier;
+        let calculatedDmg = dmg * finalMultiplier;
 
         // Apply physical armor shred (Corrosion)
         if (e.physicalDefense > 0) {
@@ -1627,11 +2121,118 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         return Math.min(2.5, Math.max(0.15, multiplier * powerRatio));
     };
 
+    const triggerBomberExplosion = (e: Enemy) => {
+        if (e.hp <= 0 && !e.isDeadFuse) return;
+        
+        e.isDeadFuse = false; // complete the dead fuse so it undergoes standard cleanup
+        e.hp = -100; // Kill the bomber
+        registerEnemyKill(e);
+        
+        // Screen shake & explosion audio
+        shake.current.time = 15;
+        if (audio.playBossExplosion) {
+            audio.playBossExplosion();
+        }
+        
+        // Explosion boundary: 4 tiles = 160 pixels
+        const radius = 160; 
+        
+        // 1. Dmg to Hero
+        const heroDist = Math.hypot(player.current.x - e.x, player.current.y - e.y);
+        if (heroDist < radius) {
+            const baseDmg = 45 + e.level * 5;
+            const mitigatedDmg = getMitigatedDamage(baseDmg);
+            killerRef.current = { type: 'bomber', level: e.level, damage: mitigatedDmg };
+            stats.current.hp -= mitigatedDmg;
+            
+            audio.playPlayerHitSound();
+            spawnPlayerHitEffect(player.current.x, player.current.y);
+            spawnPlayerDamagePopup(mitigatedDmg);
+        }
+        
+        // 2. Dmg to all OTHER mobs in radius
+        enemies.current.forEach(otherE => {
+            if (otherE !== e && otherE.hp > 0) {
+                const mobDist = Math.hypot(otherE.x - e.x, otherE.y - e.y);
+                if (mobDist < radius) {
+                    // Mobs take huge chunk of damage
+                    const mobDmg = Math.floor(100 + e.level * 15);
+                    otherE.hp -= mobDmg;
+                    spawnDamagePopup(otherE.x, otherE.y, 'Boom', otherE, true, '#ff4500');
+                    if (otherE.hp <= 0) {
+                        registerEnemyKill(otherE);
+                    }
+                }
+            }
+        });
+        
+        // 3. Gorgeous Particle visual representation
+        // Shockwave rings
+        particles.current.push({
+            x: e.x, y: e.y, vx: 0, vy: 0,
+            life: 0, maxLife: 30, color: '#ff3300', size: radius,
+            type: 'shockwave', noGravity: true
+        });
+        particles.current.push({
+            x: e.x, y: e.y, vx: 0, vy: 0,
+            life: 0, maxLife: 20, color: '#ff9900', size: radius * 0.7,
+            type: 'shockwave', noGravity: true
+        });
+        particles.current.push({
+            x: e.x, y: e.y, vx: 0, vy: 0,
+            life: 0, maxLife: 15, color: '#ffff00', size: radius * 0.4,
+            type: 'shockwave', noGravity: true
+        });
+        
+        // Fiery embers radiating
+        for (let i = 0; i < 35; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const sp = 2 + Math.random() * 8;
+            particles.current.push({
+                x: e.x, y: e.y,
+                vx: Math.cos(ang) * sp,
+                vy: Math.sin(ang) * sp - (Math.random() * 2),
+                life: 0, maxLife: 20 + Math.random() * 20,
+                color: Math.random() < 0.6 ? '#ff4500' : (Math.random() < 0.8 ? '#ffaa00' : '#ffffff'),
+                size: 3 + Math.random() * 5,
+                noGravity: Math.random() < 0.5
+            });
+        }
+        
+        // Grey smoke clouds
+        for (let i = 0; i < 15; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const sp = 0.5 + Math.random() * 1.5;
+            particles.current.push({
+                x: e.x + (Math.random() - 0.5) * 20,
+                y: e.y + (Math.random() - 0.5) * 20,
+                vx: Math.cos(ang) * sp,
+                vy: -Math.random() * 1.0,
+                life: 0, maxLife: 40 + Math.random() * 25,
+                color: 'rgba(120, 120, 120, 0.5)',
+                size: 8 + Math.random() * 12,
+                noGravity: true
+            });
+        }
+    };
+
     // Applies custom dynamic on-hit statuses upon damaging an enemy
     const applyOnHitEffects = (e: Enemy, actualDmg: number) => {
         if (!e || e.hp <= 0) return;
         
         const st = stats.current;
+        
+        // Bomber fuse start: when the bomber takes its FIRST hit from player
+        if (e.type === 'bomber' && e.fuseTimer === undefined) {
+            e.fuseTimer = 120; // 2 seconds at 60fps
+            e.isIgnited = true;
+            if (e.originalSpeed === undefined) {
+                e.originalSpeed = e.speed;
+            }
+            if (audio.playBossCharge) {
+                audio.playBossCharge();
+            }
+        }
         
         // 1. Corrosion (Acid Shred)
         if (st.acidShred) {
@@ -1733,6 +2334,12 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     revealedRooms.current.add(idx);
                     revealOpacities.current[idx] = 1.0;
                     audio.playSecretRoomSound();
+
+                    if (r.isSecret) {
+                        stats.current.secretRoomsFound++;
+                        showTrophyProgress('neon_archivist');
+                        checkTrophies();
+                    }
                                        
                     if (r.isMerchant) {
                         setIsMerchantRoom(true);
@@ -1894,11 +2501,12 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 const isTruth = weapon.special_behavior === 'truth_burst';
                 const isLaser = weapon.id === 'pistol_laser';
                 const isBubble = weapon.special_behavior === 'bubble_shot';
+                const isRocket = weapon.special_behavior === 'homing_rocket';
                 
-                player.current.burstTimer = isMythic ? 4 : (isTruth ? 3 : (isLaser ? 3 : (isBubble ? 6 : 5))); 
-                const pSpeed = isMythic ? 15 : (isTruth ? 18 : (isLaser ? 16 : (isBubble ? 3.5 : 12))); 
+                player.current.burstTimer = isMythic ? 4 : (isTruth ? 3 : (isLaser ? 3 : (isBubble ? 6 : (isRocket ? 10 : 5)))); 
+                const pSpeed = isMythic ? 15 : (isTruth ? 18 : (isLaser ? 16 : (isBubble ? 3.5 : (isRocket ? 6 : 12)))); 
                 const stacks = stats.current.physicalStacks;
-                const shotCount = isMythic ? stacks + 3 : (isTruth ? stacks + 2 : (isLaser ? stacks : (isBubble ? stacks : stacks))); 
+                const shotCount = isMythic ? stacks + 3 : (isTruth ? stacks + 2 : (isLaser ? stacks : (isBubble ? stacks : (isRocket ? 1 : stacks)))); 
                 const spawnDist = 15;
                 
                 for (let i = 0; i < shotCount; i++) {
@@ -1915,7 +2523,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         } else {
                             spawnOffsetY += offset;
                         }
-                    } else {
+                    } else if (!isRocket) {
                         // Add tiny inaccuracy and spread
                         angle += (i - (shotCount - 1) / 2) * (isMythic ? 0.08 : (isTruth ? 0.04 : (isBubble ? 0.15 : 0.05)));
                         angle += (Math.random() - 0.5) * (isMythic ? 0.2 : (isTruth ? 0.05 : (isBubble ? 0.2 : 0.1)));
@@ -1926,16 +2534,17 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                          y: player.current.y + spawnOffsetY,
                          vx: Math.cos(angle) * pSpeed,
                          vy: Math.sin(angle) * pSpeed,
-                         color: isMythic ? '#00ffff' : (isTruth ? '#ffffff' : (isLaser ? '#ff0000' : (isBubble ? weapon.color : weapon.color))),
+                         color: isMythic ? '#00ffff' : (isTruth ? '#ffffff' : (isLaser ? '#ff0000' : (isBubble ? weapon.color : (isRocket ? '#ff4500' : weapon.color)))),
                          isEnemy: false,
                          isPhysical: true,
-                         damageMult: isMythic ? 0.9 : (isTruth ? 1.2 : (isLaser ? 0.8 : (isBubble ? 0.5 : 0.6))),
+                         damageMult: isMythic ? 0.9 : (isTruth ? 1.2 : (isLaser ? 0.8 : (isBubble ? 0.5 : (isRocket ? 1.5 : 0.6)))),
                          pierce: isTruth,
-                         hitIds: (isTruth || isBubble) ? [] : undefined,
+                         hitIds: (isTruth || isBubble || isRocket) ? [] : undefined,
                          isBubble: isBubble,
                          isLaser: isLaser,
-                         homing: isBubble ? true : undefined,
-                         homingRange: isBubble ? 400 : undefined,
+                         homing: (isBubble || isRocket) ? true : undefined,
+                         homingRange: isBubble ? 400 : (isRocket ? 800 : undefined),
+                         special_behavior: isRocket ? 'homing_rocket' : undefined,
                          // Larger width based on level! (simulate "massive beam")
                          size: isBubble ? 60 : (isLaser ? 3 + Math.floor(stacks / 2) : undefined)
                     });
@@ -2100,6 +2709,16 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         else if (dy < -0.1) player.current.facing = 'up';
         else if (dy > 0.1) player.current.facing = 'down';
 
+        // Snap to axis on release for precision in corridors
+        const isAimingWithStick = gp && Math.hypot(gp.axes[2], gp.axes[3]) > 0.15;
+        const isAimingWithJoystick = joystickRef.current.active;
+        if (inputX === 0 && inputY === 0 && !isAimingWithStick && !isAimingWithJoystick) {
+            if (player.current.facing === 'left') player.current.aimAngle = Math.PI;
+            else if (player.current.facing === 'right') player.current.aimAngle = 0;
+            else if (player.current.facing === 'up') player.current.aimAngle = -Math.PI / 2;
+            else if (player.current.facing === 'down') player.current.aimAngle = Math.PI / 2;
+        }
+
         // Fire magic projectile
         const isMagicPressed = keys.current[curKeys.fire2] || (curKeys.fire2 === 'x' && keys.current['x']) || gpX;
         const isPhysPressed = keys.current[curKeys.fire1] || (curKeys.fire1 === 'z' && keys.current['z']) || gpZ || keys.current['1'];
@@ -2131,7 +2750,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 if(e.hp > 0) {
                    const dist = Math.hypot(e.x - player.current.x, e.y - player.current.y);
                    if (dist < currentMagicWeapon.range && dist < minDist) {
-                       if (hasLineOfSight(player.current.x, player.current.y, e.x, e.y)) {
+                       if (hasLineOfSight(player.current.x, player.current.y, e.x, e.y) || dist < 192) {
                            minDist = dist;
                            nearestEnemy = e;
                        }
@@ -2139,38 +2758,34 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 }
             });
             
-            player.current.magicCd = currentMagicWeapon.cooldown;
-            let angle = 0;
             if (nearestEnemy) {
-                angle = Math.atan2(nearestEnemy.y - player.current.y, nearestEnemy.x - player.current.x);
-            } else {
-                // Default to aimAngle
-                angle = player.current.aimAngle;
-            }
+                player.current.magicCd = currentMagicWeapon.cooldown;
+                let angle = Math.atan2(nearestEnemy.y - player.current.y, nearestEnemy.x - player.current.x);
 
-            const pSpeed = 8 * (1 + (stats.current.lvl - 1) * 0.02);
-            
-            projectiles.current.push({
-                x: player.current.x,
-                y: player.current.y,
-                vx: Math.cos(angle) * pSpeed,
-                vy: Math.sin(angle) * pSpeed,
-                homing: true,
-                homingRange: currentMagicWeapon.homingRange || 400,
-                magnetic: true,
-                color: currentMagicWeapon.color,
-                isEnemy: false,
-                mStacks: stats.current.magicStacks,
-                special_behavior: 'auto_star'
-            });
-            audio.playShootSound();
+                const pSpeed = 8 * (1 + (stats.current.lvl - 1) * 0.02);
+                
+                projectiles.current.push({
+                    x: player.current.x,
+                    y: player.current.y,
+                    vx: Math.cos(angle) * pSpeed,
+                    vy: Math.sin(angle) * pSpeed,
+                    homing: true,
+                    homingRange: currentMagicWeapon.homingRange || 400,
+                    magnetic: true,
+                    color: currentMagicWeapon.color,
+                    isEnemy: false,
+                    mStacks: stats.current.magicStacks,
+                    special_behavior: 'auto_star'
+                });
+                audio.playShootSound();
+            }
         }
 
-        if (isMagicPressed && !pickingUpWeapon && currentMagicWeapon.special_behavior !== 'auto_star') {
+        if (isMagicPressed && !pickingUpWeapon && (currentMagicWeapon.special_behavior !== 'auto_star' || currentMagicWeapon.id === 'star_wand')) {
             const mWeapon = currentMagicWeapon;
             const mStacks = stats.current.magicStacks;
             const manaCostRed = stats.current.manaCostRed || 0;
-            const baseMana = mWeapon.special_behavior === 'eclipse' ? 5 : 10;
+            const baseMana = mWeapon.id === 'star_wand' ? 35 : (mWeapon.special_behavior === 'eclipse' ? 5 : 10);
             const manaCost = (baseMana * Math.max(1, mStacks / 2)) * (1 - manaCostRed);
             
             if (player.current.magicCd <= 0 && stats.current.mp >= manaCost) {
@@ -2182,7 +2797,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 const magCdr = (stats.current.cooldownReduction || 0) + (stats.current.magicCooldownReduction || 0);
                 const aSpeed = stats.current.attackSpeed || 1;
                 player.current.magicCd = Math.max(5, (((mWeapon.cooldown - (mStacks * 2)) / (1 + (stats.current.lvl - 1) * 0.02)) * (1 - magCdr)) / aSpeed);
-                shake.current.time = 5;
+                shake.current.time = mWeapon.id === 'star_wand' ? 12 : 5;
                 
                 const pSpeed = 6 * (1 + (stats.current.lvl - 1) * 0.02);
                 
@@ -2193,8 +2808,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 if (mWeapon.special_behavior === 'eclipse') mDmgMult *= 2;
                 if (mWeapon.special_behavior === 'obsidian_impact') mDmgMult *= 2.2;
                 
-                // Multi-shot based on stacks
-                const shotCount = mStacks;
+                // Multi-shot based on stacks (5 for star_wand)
+                const shotCount = mWeapon.id === 'star_wand' ? 5 : mStacks;
                 
                 let attackAngle = player.current.aimAngle;
                 if (mWeapon.aimNearest) {
@@ -2225,6 +2840,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         const isCepSpeed = pSpeed * 2.5;
                         vx = Math.cos(angle) * isCepSpeed;
                         vy = Math.sin(angle) * isCepSpeed;
+                    } else if (mWeapon.id === 'star_wand') {
+                        angle += (i - (shotCount - 1) / 2) * 0.18;
+                        vx = Math.cos(angle) * pSpeed * 1.3;
+                        vy = Math.sin(angle) * pSpeed * 1.3;
                     } else {
                         angle += (i - (shotCount - 1) / 2) * 0.2;
                         vx = Math.cos(angle) * pSpeed;
@@ -2242,18 +2861,19 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         vx: vx,
                         vy: vy,
                         curve: mWeapon.curve,
-                        homing: mWeapon.homing || mWeapon.projectile_behavior === 'homing',
-                        homingRange: mWeapon.homingRange || (mWeapon.projectile_behavior === 'homing' ? 400 : undefined),
-                        magnetic: mWeapon.magnetic,
+                        homing: mWeapon.homing || mWeapon.projectile_behavior === 'homing' || mWeapon.id === 'star_wand',
+                        homingRange: mWeapon.homingRange || (mWeapon.projectile_behavior === 'homing' || mWeapon.id === 'star_wand' ? 400 : undefined),
+                        magnetic: mWeapon.magnetic || mWeapon.id === 'star_wand',
                         aoeRadius: mWeapon.aoeRadius,
                         isHighLevel: mStacks >= 3,
-                        color: mWeapon.color,
+                        color: mWeapon.id === 'star_wand' ? '#ffd700' : mWeapon.color,
                         isEnemy: false, // Explicitly defined
                         mStacks: mStacks,
-                        special_behavior: mWeapon.special_behavior,
+                        special_behavior: mWeapon.id === 'star_wand' ? 'auto_star' : mWeapon.special_behavior,
                         isCritical: isCrit,
-                        damageMult: mDmgMult,
-                        isIceCrystal: mWeapon.id === 'ice_scepter'
+                        damageMult: mWeapon.id === 'star_wand' ? mDmgMult * 5.0 : mDmgMult,
+                        isIceCrystal: mWeapon.id === 'ice_scepter',
+                        isLegendaryStar: mWeapon.id === 'star_wand'
                     });
 
                     // Add magic launch particles
@@ -2300,8 +2920,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     player.current.aimAngle = Math.atan2(nearestEnemy.y - player.current.y, nearestEnemy.x - player.current.x);
                 }
             }
-            if ((weapon.special_behavior === 'burst' || weapon.special_behavior === 'mythic_burst' || weapon.special_behavior === 'truth_burst' || weapon.special_behavior === 'bubble_shot') && player.current.attackCd <= 0 && player.current.burstCount <= 0) {
-                player.current.burstCount = weapon.special_behavior === 'mythic_burst' ? 5 : (weapon.special_behavior === 'truth_burst' ? 6 : (weapon.id === 'pistol_laser' ? 4 : (weapon.special_behavior === 'bubble_shot' ? 3 : 3)));
+            if ((weapon.special_behavior === 'burst' || weapon.special_behavior === 'mythic_burst' || weapon.special_behavior === 'truth_burst' || weapon.special_behavior === 'bubble_shot' || weapon.special_behavior === 'homing_rocket') && player.current.attackCd <= 0 && player.current.burstCount <= 0) {
+                player.current.burstCount = weapon.special_behavior === 'mythic_burst' ? 5 : (weapon.special_behavior === 'truth_burst' ? 6 : (weapon.id === 'pistol_laser' ? 4 : (weapon.special_behavior === 'bubble_shot' ? 3 : (weapon.special_behavior === 'homing_rocket' ? 1 : 3))));
                 player.current.burstTimer = 0; // Fire immediately
                 const isPistol = weapon.id.includes('pistol');
                 const physCdr = (stats.current.cooldownReduction || 0) + (stats.current.physicalCooldownReduction || 0);
@@ -2309,7 +2929,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 player.current.attackCd = ((weapon.cooldown / (1 + (stats.current.lvl - 1) * 0.02)) * (isPistol ? 0.7 : 1)) * (1 - physCdr) / aSpeed;
             }
 
-            if (weapon.id === 'thunder_hammer' || weapon.id === 'mythic_pistol' || weapon.id === 'pistol_truth' || weapon.id === 'astral_spear' || weapon.id === 'castle_whip' || weapon.id === 'bubble_gun' || weapon.id === 'bubble_wand_gold' || weapon.id === 'jade_boomerang') {
+            if (weapon.id === 'thunder_hammer' || weapon.id === 'mythic_pistol' || weapon.id === 'pistol_truth' || weapon.id === 'astral_spear' || weapon.id === 'castle_whip' || weapon.id === 'bubble_gun' || weapon.id === 'bubble_wand_gold' || weapon.id === 'jade_boomerang' || weapon.id === 'rocket_launcher') {
                 const stacks = stats.current.physicalStacks;
                 player.current.chargeTimer += 1 * timeScale;
                 // Visual feedback for charging
@@ -2335,13 +2955,36 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         if (r.isMerchant && revealedRooms.current.has(idx)) {
                             const cx = r.cx * GRID_SIZE + GRID_SIZE / 2;
                             const cy = r.cy * GRID_SIZE + GRID_SIZE / 2;
-                            if (Math.hypot(cx - player.current.x, cy - player.current.y) < weapon.range * 1.5) {
-                                if (!showShop && !isMerchantRoom) {
-                                    audio.playSecretRoomSound(); 
-                                    setIsMerchantRoom(true);
-                                    setShowShop(true);
-                                    pauseRef.current = true;
-                                    hitSomething = true;
+                            const dx = cx - player.current.x;
+                            const dy = cy - player.current.y;
+                            const dist = Math.hypot(dx, dy);
+
+                            if (dist <= GRID_SIZE * 1.5) {
+                                // Check standard 4-way facing direction towards merchant
+                                let isFacing = false;
+                                if (player.current.facing === 'left' && dx < 0 && Math.abs(dy) < Math.abs(dx)) {
+                                    isFacing = true;
+                                } else if (player.current.facing === 'right' && dx > 0 && Math.abs(dy) < Math.abs(dx)) {
+                                    isFacing = true;
+                                } else if (player.current.facing === 'up' && dy < 0 && Math.abs(dx) < Math.abs(dy)) {
+                                    isFacing = true;
+                                } else if (player.current.facing === 'down' && dy > 0 && Math.abs(dx) < Math.abs(dy)) {
+                                    isFacing = true;
+                                }
+
+                                // Or check aiming direction (aimAngle is within 60 degrees of merchant)
+                                const angleToMerchant = Math.atan2(dy, dx);
+                                const angleDiff = Math.atan2(Math.sin(angleToMerchant - player.current.aimAngle), Math.cos(angleToMerchant - player.current.aimAngle));
+                                const isAimingAtMerchant = Math.abs(angleDiff) < Math.PI / 3;
+
+                                if (isFacing || isAimingAtMerchant) {
+                                    if (!showShop && !isMerchantRoom) {
+                                        audio.playSecretRoomSound(); 
+                                        setIsMerchantRoom(true);
+                                        setShowShop(true);
+                                        pauseRef.current = true;
+                                        hitSomething = true;
+                                    }
                                 }
                             }
                         }
@@ -2350,11 +2993,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     // Melee chest hit
                     chests.current.forEach(c => {
                         if (!c.opened) {
-                            // Ambush protection: chests are immune until ambush is over
-                            if (activeAmbush.current) {
-                                const ridx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
-                                if (ridx === activeAmbush.current.roomId) return;
-                            }
+                            // Protection: immune if in secret room not yet revealed or during ambush
+                            const ridx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
+                            if (ridx !== undefined && !revealedRooms.current.has(ridx)) return;
+                            if (activeAmbush.current && ridx === activeAmbush.current.roomId) return;
 
                             const cx = c.gridX * GRID_SIZE + GRID_SIZE / 2;
                             const cy = c.gridY * GRID_SIZE + GRID_SIZE / 2;
@@ -2533,11 +3175,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         }
                         chests.current.forEach(c => {
                             if (!c.opened) {
-                                // Ambush protection: chests are immune until ambush is over
-                                if (activeAmbush.current) {
-                                    const ridx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
-                                    if (ridx === activeAmbush.current.roomId) return;
-                                }
+                                // Protection: immune if in secret room not yet revealed or during ambush
+                                const ridx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
+                                if (ridx !== undefined && !revealedRooms.current.has(ridx)) return;
+                                if (activeAmbush.current && ridx === activeAmbush.current.roomId) return;
 
                                 const cx = c.gridX * GRID_SIZE + GRID_SIZE / 2;
                                 const cy = c.gridY * GRID_SIZE + GRID_SIZE / 2;
@@ -2725,6 +3366,27 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         life: 0, maxLife: 30, color: weapon.id === 'bubble_wand_gold' ? '#fff3b0' : '#00eeff', size: 3
                     });
                 }
+            }
+
+            if (weapon.id === 'rocket_launcher' && player.current.chargeTimer >= 30) {
+                player.current.chargeTimer = 0;
+                player.current.attackCd = (weapon.cooldown * (1 - physCdr)) / aSpeed;
+                audio.playShootSound(); 
+
+                projectiles.current.push({
+                    x: player.current.x,
+                    y: player.current.y,
+                    vx: Math.cos(player.current.aimAngle) * 4,
+                    vy: Math.sin(player.current.aimAngle) * 4,
+                    color: '#ff4500',
+                    isEnemy: false,
+                    isPhysical: true,
+                    homing: true,
+                    homingRange: 800,
+                    special_behavior: 'homing_rocket',
+                    damageMult: 1.0,
+                    hitIds: []
+                });
             }
 
             if (weapon.id === 'castle_whip' && player.current.chargeTimer >= 40) {
@@ -3122,45 +3784,64 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             }
 
             if ((p.curve || p.homing) && !p.isEnemy && !p.isBoomerang) {
-                // Find closest enemy
-                let closestDist = p.homingRange || Infinity;
-                let closestEnemy: Enemy | null = null;
-                enemies.current.forEach(e => {
-                    const dist = Math.hypot(e.x - p.x, e.y - p.y);
-                    if (e.hp > 0 && dist < closestDist) {
-                        if (hasLineOfSight(p.x, p.y, e.x, e.y)) {
-                            closestDist = dist;
-                            closestEnemy = e;
+                // Rocket Launcher special: go straight while in narrow passages
+                let skipHoming = false;
+                if (p.special_behavior === 'homing_rocket') {
+                    const gx = Math.floor(p.x / GRID_SIZE);
+                    const gy = Math.floor(p.y / GRID_SIZE);
+                    const isW = (tx: number, ty: number) => {
+                        if (ty < 0 || ty >= dungeon.current.length || tx < 0 || tx >= dungeon.current[0].length) return true;
+                        return dungeon.current[ty][tx] === 0 || dungeon.current[ty][tx] === 2;
+                    };
+                    // If in a 1-tile wide horizontal or vertical tunnel, keep straight velocity
+                    const horizontalTunnel = isW(gx, gy - 1) && isW(gx, gy + 1);
+                    const verticalTunnel = isW(gx - 1, gy) && isW(gx + 1, gy);
+                    if (horizontalTunnel || verticalTunnel) {
+                        skipHoming = true;
+                    }
+                }
+
+                if (!skipHoming) {
+                    // Find closest enemy
+                    let closestDist = p.homingRange || Infinity;
+                    let closestEnemy: Enemy | null = null;
+                    enemies.current.forEach(e => {
+                        const dist = Math.hypot(e.x - p.x, e.y - p.y);
+                        if (e.hp > 0 && dist < closestDist) {
+                            if (hasLineOfSight(p.x, p.y, e.x, e.y)) {
+                                closestDist = dist;
+                                closestEnemy = e;
+                            }
                         }
-                    }
-                });
+                    });
 
-                if (closestEnemy) {
-                    const dx = (closestEnemy as Enemy).x - p.x;
-                    const dy = (closestEnemy as Enemy).y - p.y;
-                    const angleToEnemy = Math.atan2(dy, dx);
-                    const angleProjectile = Math.atan2(p.vy, p.vx);
-                    const speed = Math.hypot(p.vx, p.vy);
-                    
-                    // Simple angular interpolation
-                    const angleDiff = angleToEnemy - angleProjectile;
-                    // Normalize angle difference to [-PI, PI]
-                    const normalizedDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
-                    
-                    const homingFactor = p.homing ? 0.85 : (p.curve || 0.2);
-                    let newAngle = angleProjectile + normalizedDiff * homingFactor;
-                    
-                    // Magnetic snapping if very close
-                    if (p.magnetic && closestDist < GRID_SIZE * 0.5) {
-                        const snappingForce = 0.8;
-                        newAngle = angleProjectile + normalizedDiff * snappingForce;
-                        // Also boost speed slightly for "snap" feel
-                        p.vx *= 1.05;
-                        p.vy *= 1.05;
-                    }
+                    if (closestEnemy) {
+                        const dx = (closestEnemy as Enemy).x - p.x;
+                        const dy = (closestEnemy as Enemy).y - p.y;
+                        const angleToEnemy = Math.atan2(dy, dx);
+                        const angleProjectile = Math.atan2(p.vy, p.vx);
+                        const speed = Math.hypot(p.vx, p.vy);
+                        
+                        // Simple angular interpolation
+                        const angleDiff = angleToEnemy - angleProjectile;
+                        // Normalize angle difference to [-PI, PI]
+                        const normalizedDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+                        
+                        const homingFactor = p.homing ? 0.85 : (p.curve || 0.2);
+                        let newAngle = angleProjectile + normalizedDiff * homingFactor;
+                        
+                        // Magnetic snapping if very close
+                        if (p.magnetic && closestDist < GRID_SIZE * 0.5) {
+                            const snappingForce = 0.8;
+                            newAngle = angleProjectile + normalizedDiff * snappingForce;
+                            // Also boost speed slightly for "snap" feel
+                            p.vx *= 1.05;
+                            p.vy *= 1.05;
+                        }
 
-                    p.vx = speed * Math.cos(newAngle);
-                    p.vy = speed * Math.sin(newAngle);
+                        p.vx = speed * Math.cos(newAngle);
+                        p.vy = speed * Math.sin(newAngle);
+                    }
                 }
             }
             if (p.isBubble) {
@@ -3230,6 +3911,16 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             p.x += p.vx * timeScale;
             p.y += p.vy * timeScale;
 
+            if (p.special_behavior === 'homing_rocket') {
+                if (Math.random() < 0.3) {
+                    particles.current.push({
+                        x: p.x, y: p.y,
+                        vx: (Math.random() - 0.5) * 1, vy: (Math.random() - 0.5) * 1,
+                        life: 0, maxLife: 20, color: '#888888', size: 2
+                    });
+                }
+            }
+
             if (p.isBoomerang && p.color === '#00ffaa') {
                 if (Math.random() < 0.4) {
                     particles.current.push({
@@ -3242,7 +3933,20 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
             // Legendary Projectile Trails (e.g. Bacchetta Bastarda)
             if (!p.isEnemy && p.homing) {
-                if (p.special_behavior === 'auto_star') {
+                if (p.isLegendaryStar) {
+                    if (Math.random() < 0.70) {
+                        const isGold = Math.random() > 0.4;
+                        const pColor = isGold ? '#ffd700' : '#ffaa00';
+                        particles.current.push({
+                            x: p.x, y: p.y,
+                            vx: (Math.random() - 0.5) * 3, vy: (Math.random() - 0.5) * 3,
+                            life: 0, maxLife: 25,
+                            color: pColor,
+                            size: 2.2 + Math.random() * 2,
+                            type: 'star'
+                        });
+                    }
+                } else if (p.special_behavior === 'auto_star') {
                     if (Math.random() < 0.6) {
                         const isBlue = Math.random() > 0.5;
                         const pColor = isBlue ? '#00ccff' : '#ffffff';
@@ -3361,7 +4065,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 
                 if (canHit && Math.hypot(e.x - p.x, e.y - p.y) < (e.type === 'nest' ? e.size * 1.5 : e.size)) {
                     if (!p.isEnemy) {
-                        lastHitMobRef.current = { type: e.type, level: e.level, id: e.id, maxHp: e.maxHp };
+                        lastHitMobRef.current = { type: e.type, level: e.level, id: e.id, maxHp: e.maxHp, hitTime: Date.now(), deathTime: null };
                     }
                     
                     // Boomerang does not damage nests
@@ -3409,6 +4113,12 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     if (p.isBubble) {
                         e.stunTimer = 180 * getEffectMultiplier(e); // Trap them
                         e.isBubbleTrapped = true;
+                    }
+
+                    if (p.special_behavior === 'homing_rocket') {
+                        e.isRocketTrapped = true;
+                        e.rocketTimer = 120;
+                        hit = true;
                     }
 
                     // AoE Damage
@@ -3517,11 +4227,37 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         const cy = r.cy * GRID_SIZE + GRID_SIZE / 2;
                         if (Math.hypot(cx - p.x, cy - p.y) < 20) {
                             hit = true;
-                            if (!showShop && !isMerchantRoom) {
-                                audio.playSecretRoomSound(); 
-                                setIsMerchantRoom(true);
-                                setShowShop(true);
-                                pauseRef.current = true;
+
+                            const dx = cx - player.current.x;
+                            const dy = cy - player.current.y;
+                            const dist = Math.hypot(dx, dy);
+
+                            if (dist <= GRID_SIZE * 1.5) {
+                                // Check standard 4-way facing direction towards merchant
+                                let isFacing = false;
+                                if (player.current.facing === 'left' && dx < 0 && Math.abs(dy) < Math.abs(dx)) {
+                                    isFacing = true;
+                                } else if (player.current.facing === 'right' && dx > 0 && Math.abs(dy) < Math.abs(dx)) {
+                                    isFacing = true;
+                                } else if (player.current.facing === 'up' && dy < 0 && Math.abs(dx) < Math.abs(dy)) {
+                                    isFacing = true;
+                                } else if (player.current.facing === 'down' && dy > 0 && Math.abs(dx) < Math.abs(dy)) {
+                                    isFacing = true;
+                                }
+
+                                // Or check aiming direction (aimAngle is within 60 degrees of merchant)
+                                const angleToMerchant = Math.atan2(dy, dx);
+                                const angleDiff = Math.atan2(Math.sin(angleToMerchant - player.current.aimAngle), Math.cos(angleToMerchant - player.current.aimAngle));
+                                const isAimingAtMerchant = Math.abs(angleDiff) < Math.PI / 3;
+
+                                if (isFacing || isAimingAtMerchant) {
+                                    if (!showShop && !isMerchantRoom) {
+                                        audio.playSecretRoomSound(); 
+                                        setIsMerchantRoom(true);
+                                        setShowShop(true);
+                                        pauseRef.current = true;
+                                    }
+                                }
                             }
                         }
                     }
@@ -3530,11 +4266,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 // Chest collision (only for player projectiles)
                 chests.current.forEach(c => {
                     if (!hit && !c.opened) {
-                        // Ambush protection: chests are immune until ambush is over
-                        if (activeAmbush.current) {
-                            const ridx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
-                            if (ridx === activeAmbush.current.roomId) return;
-                        }
+                        // Protection: immune if in secret room not yet revealed or during ambush
+                        const ridx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
+                        if (ridx !== undefined && !revealedRooms.current.has(ridx)) return;
+                        if (activeAmbush.current && ridx === activeAmbush.current.roomId) return;
 
                         const cx = c.gridX * GRID_SIZE + GRID_SIZE / 2;
                         const cy = c.gridY * GRID_SIZE + GRID_SIZE / 2;
@@ -3611,7 +4346,23 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         }
 
         // Clean up dead enemies
-        enemies.current = enemies.current.filter(e => e.hp > 0);
+        enemies.current = enemies.current.filter(e => e.hp > 0 || e.isDeadFuse);
+        
+        // Force spawn portal if boss is killed but portal is missing
+        if (bossKilled.current && !portal.current) {
+             let placed = false;
+             const h = dungeon.current.length;
+             const w = dungeon.current[0].length;
+             while (!placed) {
+                 const rx = Math.floor(Math.random() * w) * GRID_SIZE + GRID_SIZE / 2;
+                 const ry = Math.floor(Math.random() * h) * GRID_SIZE + GRID_SIZE / 2;
+                 if (!checkCollision(rx, ry)) {
+                      portal.current = { x: rx, y: ry };
+                      placed = true;
+                 }
+             }
+        }
+
         if (!bossKilled.current && !enemies.current.some(e => e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect')) {
             bossKilled.current = true;
             audio.stopBackgroundMusic();
@@ -3641,6 +4392,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         // Trigger Shop
         if (bossKilled.current && portal.current && !showShop) {
             if (Math.hypot(player.current.x - portal.current.x, player.current.y - portal.current.y) < 30) {
+                stats.current.roomsCleared++;
+                showTrophyProgress('pixel_survivor');
                 setShowShop(true);
             }
         }
@@ -3667,7 +4420,164 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             player.current.y <= (bRoom.y + bRoom.h) * GRID_SIZE;
 
         enemies.current.forEach(e => {
-            if (e.hp <= 0) return;
+            if (e.hp <= 0 && !e.isDeadFuse) return;
+
+            // --- HARPOON DRAG LOGIC ---
+            if (player.current.harpoonedEnemyId === e.id) {
+                // Mana recharge and DoT (1% mana per frame, 0.5 HP per frame)
+                stats.current.mp = Math.min(stats.current.mp + 0.01, stats.current.maxMp);
+                e.hp -= 0.5;
+                
+                // Extended hold: if attack key is held, increase duration.
+                const { fire1 } = settingsRef.current.keys;
+                if (keys.current[fire1]) {
+                    e.harpoonedDuration = Math.min((e.harpoonedDuration || 0) + 1, 300); // Max 5s (300 frames)
+                } else {
+                    // Detach damage if released
+                    if ((e.harpoonedDuration || 0) > 0) {
+                        e.hp -= 50;
+                        player.current.harpoonedEnemyId = null;
+                        e.harpoonedDuration = 0;
+                    }
+                }
+                // Detach if max duration reached
+                if ((e.harpoonedDuration || 0) >= 300) {
+                   e.hp -= 50;
+                   player.current.harpoonedEnemyId = null;
+                   e.harpoonedDuration = 0;
+                }
+            }
+
+            // --- ROCKET TRAP & EXPLOSION LOGIC ---
+            if (e.isRocketTrapped) {
+                e.rocketTimer = (e.rocketTimer || 0) - 1 * timeScale;
+                if (e.rocketTimer <= 0) {
+                    // Explode
+                    e.isRocketTrapped = false;
+                    e.rocketTimer = 0;
+                    
+                    // Screen shake & explosion audio
+                    shake.current.time = 20;
+                    if (audio.playBossExplosion) {
+                        audio.playBossExplosion();
+                    }
+
+                    // Particles (Shockwave and fire)
+                    const explosionRadius = 250;
+                    particles.current.push({
+                        x: e.x, y: e.y, vx: 0, vy: 0,
+                        life: 0, maxLife: 25, color: '#ff4500', size: explosionRadius,
+                        type: 'shockwave', noGravity: true
+                    });
+                    particles.current.push({
+                        x: e.x, y: e.y, vx: 0, vy: 0,
+                        life: 0, maxLife: 15, color: '#ffcc00', size: explosionRadius * 0.6,
+                        type: 'shockwave', noGravity: true
+                    });
+
+                    for (let i = 0; i < 15; i++) {
+                        const pAngle = Math.random() * Math.PI * 2;
+                        const pDist = Math.random() * 30;
+                        particles.current.push({
+                            x: e.x + Math.cos(pAngle) * pDist,
+                            y: e.y + Math.sin(pAngle) * pDist,
+                            vx: Math.cos(pAngle) * (2 + Math.random() * 6),
+                            vy: Math.sin(pAngle) * (2 + Math.random() * 6),
+                            life: 0, maxLife: 30 + Math.random() * 20,
+                            color: Math.random() < 0.6 ? '#ff4500' : '#ffcc00',
+                            size: 4 + Math.random() * 8
+                        });
+                    }
+
+                    // Area Damage to all enemies
+                    const statsForDmg = stats.current;
+                    const magicP = (statsForDmg as any).magicPower || 0;
+                    const explosionDmg = Math.floor((100 + statsForDmg.lvl * 20) * (magicP * 0.5 + statsForDmg.strength * 0.5 + 1));
+
+                    enemies.current.forEach(otherE => {
+                        if (otherE.hp > 0) {
+                            const distSet = Math.hypot(e.x - otherE.x, e.y - otherE.y);
+                            if (distSet < explosionRadius) {
+                                (otherE as any).hp -= explosionDmg;
+                                spawnDamagePopup(otherE.x, otherE.y, 'Boom', otherE, true, '#ff4500');
+                                if (otherE.hp <= 0) {
+                                    registerEnemyKill(otherE);
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
+            // --- BOMBER COUNTDOWN & EXPLOSION TICK ---
+            if (e.type === 'bomber') {
+                // Ignite if sees player (and is not already ignited)
+                if (e.fuseTimer === undefined && !e.isDeadFuse) {
+                    const distToPlayer = Math.hypot(player.current.x - e.x, player.current.y - e.y);
+                    // Standard visual range: 450 px
+                    if (distToPlayer < 450) {
+                        // Immediately run a precise Line of Sight check to detect the hero
+                        if (hasLineOfSight(e.x, e.y, player.current.x, player.current.y)) {
+                            e.fuseTimer = 120; // 2 seconds at 60fps
+                            e.isIgnited = true;
+                            if (e.originalSpeed === undefined) {
+                                e.originalSpeed = e.speed;
+                            }
+                            if (audio.playBossCharge) {
+                                audio.playBossCharge();
+                            }
+                        }
+                    }
+                }
+
+                // Fail-safe ignition: if it has taken any damage but isn't ticking yet, ignite it!
+                if (e.hp < e.maxHp && e.fuseTimer === undefined && !e.isDeadFuse) {
+                    e.fuseTimer = 120; // 2 seconds at 60fps
+                    e.isIgnited = true;
+                    if (e.originalSpeed === undefined) {
+                        e.originalSpeed = e.speed;
+                    }
+                    if (audio.playBossCharge) {
+                        audio.playBossCharge();
+                    }
+                }
+
+                if (e.fuseTimer !== undefined && e.fuseTimer > 0) {
+                    e.fuseTimer -= 1 * timeScale;
+                    
+                    // Make it run faster with ignited fuse to pursue the player eagerly as a kamikaze! (unless dead)
+                    if (e.isDeadFuse) {
+                        e.speed = 0;
+                    } else {
+                        // Kamikaze chase! Starts at 1.8x speed and accelerates to 3.0x speed as fuse burns down!
+                        const pctDone = (120 - e.fuseTimer) / 120;
+                        const kamikazeBoost = 1.8 + pctDone * 1.5; // reaches 3.3x speed
+                        e.speed = (e.originalSpeed || 1.6) * kamikazeBoost;
+                    }
+                    
+                    // Push sparks from the ignited fuse wire
+                    if (Math.random() < 0.6) {
+                        particles.current.push({
+                            x: e.x + 10 + (Math.random() - 0.5) * 4,
+                            y: e.y - e.size * 1.3 + (Math.random() - 0.5) * 4,
+                            vx: (Math.random() - 0.5) * 4,
+                            vy: -Math.random() * 4,
+                            life: 0, maxLife: 15,
+                            color: Math.random() < 0.5 ? '#ff4500' : '#ffcc00',
+                            size: 2 + Math.random() * 3,
+                            noGravity: true
+                        });
+                    }
+
+                    if (e.fuseTimer <= 0) {
+                        triggerBomberExplosion(e);
+                        return; // exit early for this exploded bomber
+                    }
+                }
+            }
+
+            // Skip AI updates for dead fusing bombers
+            if (e.isDeadFuse) return;
 
             // Micro-optimization: Line-of-sight is calculated only once every 15 frames to reduce execution lag
             if (e.losCheckTimer === undefined) {
@@ -3861,50 +4771,69 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 
                 const isSpawning = e.spawnTimer! < 90; // Last 1.5 seconds at 60fps ref
 
-                if (e.spawnTimer! <= 0 && canSpawnEnemy() && activeEnemies < 15 + stats.current.dungeonLevel * 2 + stats.current.dungeonLevel * 3) {
+                if (e.spawnTimer! <= 0 && canSpawnEnemy() && activeEnemies < 30 + stats.current.dungeonLevel * 5) {
                     // Spawn logic
                     const minibossChance = bossKilled.current ? 0.6 : 0.4;
                     const isMiniboss = (activeEnemies < 2 && Math.random() < minibossChance) || (bossKilled.current && activeEnemies < 4 && Math.random() < 0.3);
 
-                        if (isMiniboss) {
-                        const baseTypes: Enemy['baseType'][] = ['warrior', 'archer', 'mage', 'skeleton', 'vampire'];
-                        const base = baseTypes[Math.floor(Math.random() * baseTypes.length)];
-                        // Spawn Miniboss
-                        enemies.current.push({ 
-                            id: Math.random(), x: e.x, y: e.y, 
-                            hp: 400 + stats.current.dungeonLevel * 60, 
-                            maxHp: 400 + stats.current.dungeonLevel * 60, 
-                            size: 30, // Double normal size
-                            type: 'miniboss', 
-                            baseType: base,
-                            speed: 0.8, level: stats.current.dungeonLevel, state: 'patrol', 
-                            targetX: player.current.x, targetY: player.current.y, 
-                            isAmbushEnemy: e.isAmbushEnemy,
-                            attackCd: 0, dir: 'down', ...getEnemyDefense('miniboss') 
-                        });
-                        // 2 random minions (sgherri)
-                        const mobTypes: Enemy['type'][] = ['warrior', 'archer', 'mage', 'skeleton'];
-                        for (let i = 0; i < 2; i++) {
-                            const st = mobTypes[Math.floor(Math.random() * mobTypes.length)];
+                    if (isMiniboss) {
+                        const spot = findSafeSpawnPosition(e.x, e.y, 30);
+                        if (spot) {
+                            const baseTypes: Enemy['baseType'][] = ['warrior', 'archer', 'mage', 'skeleton', 'vampire'];
+                            const base = baseTypes[Math.floor(Math.random() * baseTypes.length)];
+                            // Spawn Miniboss
                             enemies.current.push({ 
-                                id: Math.random(), 
-                                x: e.x + (Math.random() - 0.5) * 40, 
-                                y: e.y + (Math.random() - 0.5) * 40, 
-                                hp: 100 + stats.current.dungeonLevel * 15, 
-                                maxHp: 100 + stats.current.dungeonLevel * 15, 
-                                size: 15, type: st, speed: 1.2, 
-                                level: stats.current.dungeonLevel, state: 'patrol', 
+                                id: Math.random(), x: spot.x, y: spot.y, 
+                                hp: 400 + stats.current.dungeonLevel * 60, 
+                                maxHp: 400 + stats.current.dungeonLevel * 60, 
+                                size: 30, // Double normal size
+                                type: 'miniboss', 
+                                baseType: base,
+                                roomId: e.roomId,
+                                speed: 0.8, level: stats.current.dungeonLevel, state: 'patrol', 
                                 targetX: player.current.x, targetY: player.current.y, 
                                 isAmbushEnemy: e.isAmbushEnemy,
-                                attackCd: 0, dir: 'down', ...getEnemyDefense(st) 
+                                attackCd: 0, dir: 'down', ...getEnemyDefense('miniboss') 
                             });
+                            // 2 random minions (sgherri)
+                            const mobTypes: Enemy['type'][] = ['warrior', 'archer', 'mage', 'skeleton'];
+                            for (let i = 0; i < 2; i++) {
+                                const mSpot = findSafeSpawnPosition(e.x, e.y, 15);
+                                if (mSpot) {
+                                    const st = mobTypes[Math.floor(Math.random() * mobTypes.length)];
+                                    enemies.current.push({ 
+                                        id: Math.random(), 
+                                        x: mSpot.x, 
+                                        y: mSpot.y, 
+                                        hp: 100 + stats.current.dungeonLevel * 15, 
+                                        maxHp: 100 + stats.current.dungeonLevel * 15, 
+                                        size: 15, type: st, speed: 1.2, 
+                                        level: stats.current.dungeonLevel, state: 'patrol', 
+                                        targetX: player.current.x, targetY: player.current.y, 
+                                        roomId: e.roomId,
+                                        isAmbushEnemy: e.isAmbushEnemy,
+                                        attackCd: 0, dir: 'down', ...getEnemyDefense(st) 
+                                    });
+                                }
+                            }
                         }
                     } else {
-                        const types: Enemy['type'][] = ['warrior', 'archer', 'mage', 'vampire'];
-                        const spawnType = types[Math.floor(Math.random() * types.length)];
-                        enemies.current.push({ id: Math.random(), x: e.x, y: e.y, hp: 100 + stats.current.dungeonLevel * 15, maxHp: 100 + stats.current.dungeonLevel * 15, size: 15, type: spawnType, speed: 1 + Math.random() * 0.5, level: stats.current.dungeonLevel, state: 'patrol', targetX: e.x, targetY: e.y, isAmbushEnemy: e.isAmbushEnemy, attackCd: 0, dir: 'down', ...getEnemyDefense(spawnType as Enemy['type']) });
+                        const spot = findSafeSpawnPosition(e.x, e.y, 15);
+                        if (spot) {
+                            const types: Enemy['type'][] = ['warrior', 'archer', 'mage', 'vampire'];
+                            const spawnType = types[Math.floor(Math.random() * types.length)];
+                            enemies.current.push({ 
+                                id: Math.random(), x: spot.x, y: spot.y, 
+                                hp: 100 + stats.current.dungeonLevel * 15, 
+                                maxHp: 100 + stats.current.dungeonLevel * 15, 
+                                size: 15, type: spawnType, 
+                                roomId: e.roomId,
+                                speed: 1 + Math.random() * 0.5, level: stats.current.dungeonLevel, state: 'patrol', targetX: e.x, targetY: e.y, isAmbushEnemy: e.isAmbushEnemy, attackCd: 0, dir: 'down', ...getEnemyDefense(spawnType as Enemy['type']) 
+                            });
+                        }
                     }
-                    
+
+                    // Reset Timer ONLY after spawn check
                     const levelFactor = Math.max(0.2, 1 - (stats.current.dungeonLevel - 1) * 0.1); 
                     const spawnCooldown = levelFactor * nestSpeedMultiplier;
                     
@@ -3919,7 +4848,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 return;
             }
 
-            // Projectile Avoidance AI
+                    // Projectile Avoidance AI
             if (e.type !== 'nest' && e.hp > 0) {
                 // Boss Ticks (Vacuum, etc)
                 if (e.vacuumTimer && e.vacuumTimer > 0) {
@@ -4305,12 +5234,31 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                 vy = (dy / dist) * e.speed * timeScale;
                             }
                         } else if (e.type === 'bomber') {
-                            vx = (dx / dist) * e.speed * 1.5 * timeScale;
-                            vy = (dy / dist) * e.speed * 1.5 * timeScale;
-                            if (Math.random() < 0.1) {
-                                 particles.current.push({
-                                    x: e.x, y: e.y, vx: 0, vy: 0, life: 0, maxLife: 10, color: '#ff6600', size: 3
-                                });
+                            const isIgnited = e.fuseTimer !== undefined && e.fuseTimer > 0;
+                            const speedMultFactor = isIgnited ? 2.2 : 1.5;
+                            vx = (dx / dist) * e.speed * speedMultFactor * timeScale;
+                            vy = (dy / dist) * e.speed * speedMultFactor * timeScale;
+                            
+                            if (isIgnited) {
+                                // Intense kamikaze rocket trail sparks!
+                                if (Math.random() < 0.6) {
+                                     particles.current.push({
+                                        x: e.x + (Math.random() - 0.5) * e.size,
+                                        y: e.y + (Math.random() - 0.5) * e.size,
+                                        vx: -vx * 0.35 + (Math.random() - 0.5) * 1.5,
+                                        vy: -vy * 0.35 + (Math.random() - 0.5) * 1.5,
+                                        life: 0, maxLife: 18,
+                                        color: Math.random() < 0.5 ? '#ff3300' : '#ff9900',
+                                        size: 2.5 + Math.random() * 3,
+                                        noGravity: true
+                                     });
+                                }
+                            } else {
+                                if (Math.random() < 0.1) {
+                                     particles.current.push({
+                                        x: e.x, y: e.y, vx: 0, vy: 0, life: 0, maxLife: 10, color: '#ff6600', size: 3
+                                    });
+                                }
                             }
                         } else if (e.type === 'teleporter') {
                             if (dist < 120 && Math.random() < 0.05) {
@@ -4904,43 +5852,26 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                             shake.current.time = 8;
                         }
                     } else if (e.type === 'bomber') {
-                        // EXPLODE!
-                        e.hp = -100; // Trigger death
-                        shake.current.time = 12;
-                        audio.playBossExplosion && audio.playBossExplosion();
-                        if (dist < 100) {
-                            const dmg = Math.floor((30 + e.level * 4) * (settingsRef.current.difficulty || 3) * 0.3);
-                            const finalDmg = getMitigatedDamage(dmg);
-                            killerRef.current = { type: e.type, level: e.level, damage: finalDmg };
-                            stats.current.hp -= finalDmg;
-                            audio.playPlayerHitSound();
-                            spawnPlayerHitEffect(player.current.x, player.current.y);
-                            spawnPlayerDamagePopup(finalDmg);
-                        }
-                        // Visual explosion circle
-                        for(let i=0; i<30; i++) {
-                            const ang = Math.random() * Math.PI * 2;
-                            const s = 1 + Math.random() * 8;
-                            particles.current.push({
-                                x: e.x, y: e.y, vx: Math.cos(ang)*s, vy: Math.sin(ang)*s,
-                                life: 0, maxLife: 30, color: '#ff6600', size: 6
-                            });
-                        }
+                        // Bomber doesn't instantly explode on contact anymore.
+                        // Instead, it relies on its fuse timer triggered by player hits.
+                        e.attackCd = 30;
                     } else if (e.type === 'necromancer') {
                         e.attackCd = 180; // Slow attack
                         if (canSpawnEnemy('skeleton')) {
-                            const ang = Math.random() * Math.PI * 2;
-                            enemies.current.push({
-                                id: Math.random(),
-                                x: e.x + Math.cos(ang) * 40, y: e.y + Math.sin(ang) * 40,
-                                hp: 40 + e.level * 5, maxHp: 40 + e.level * 5,
-                                size: 14, type: 'skeleton', speed: 1.5,
-                                level: e.level, state: 'chase', targetX: player.current.x, targetY: player.current.y,
-                                isAmbushEnemy: e.isAmbushEnemy,
-                                attackCd: 30, dir: 'down',
-                                ...getEnemyDefense('skeleton')
-                            });
-                            audio.playPopSound();
+                            const spot = findSafeSpawnPosition(e.x, e.y, 14, 30, 60);
+                            if (spot) {
+                                enemies.current.push({
+                                    id: Math.random(),
+                                    x: spot.x, y: spot.y,
+                                    hp: 40 + e.level * 5, maxHp: 40 + e.level * 5,
+                                    size: 14, type: 'skeleton', speed: 1.5,
+                                    level: e.level, state: 'chase', targetX: player.current.x, targetY: player.current.y,
+                                    isAmbushEnemy: e.isAmbushEnemy,
+                                    attackCd: 30, dir: 'down',
+                                    ...getEnemyDefense('skeleton')
+                                });
+                                audio.playPopSound();
+                            }
                         }
                     } else if (e.type === 'teleporter') {
                         e.attackCd = 80;
@@ -5330,8 +6261,23 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     pickedUpWeaponThisFrame = true;
                     const wDef = WEAPONS[pickedName];
                     if (wDef.type === 'sword' || wDef.type === 'boomerang' || wDef.type === 'hammer') {
+                        stats.current.itemsCollected++;
+                        showTrophyProgress('loot_goblin');
+                        stats.current.weaponsCollected = (stats.current.weaponsCollected || 0) + 1;
+                        showTrophyProgress('weapon_master');
+                        if (l.rarity === 'legendary') {
+                            stats.current.rareDropsCollected++;
+                            showTrophyProgress('cyber_collector');
+                        }
+                        checkTrophies();
+
                         if (stats.current.physicalWeapon === pickedName) {
+                            const oldStacks = stats.current.physicalStacks;
                             stats.current.physicalStacks = Math.min(9, stats.current.physicalStacks + 1);
+                            if (stats.current.physicalStacks > oldStacks) {
+                                stats.current.weaponsUpgraded = (stats.current.weaponsUpgraded || 0) + 1;
+                                showTrophyProgress('upgrade_me');
+                            }
                             triggerWeaponLevelUpAnimation(pickedName, false, stats.current.physicalStacks);
                         } else {
                             stats.current.physicalWeapon = pickedName;
@@ -5339,8 +6285,23 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                             stats.current.physicalStacks = 1;
                         }
                     } else {
+                        stats.current.itemsCollected++;
+                        showTrophyProgress('loot_goblin');
+                        stats.current.weaponsCollected = (stats.current.weaponsCollected || 0) + 1;
+                        showTrophyProgress('weapon_master');
+                        if (l.rarity === 'legendary') {
+                            stats.current.rareDropsCollected++;
+                            showTrophyProgress('cyber_collector');
+                        }
+                        checkTrophies();
+
                         if (stats.current.magicWeapon === pickedName) {
+                            const oldStacks = stats.current.magicStacks;
                             stats.current.magicStacks = Math.min(9, stats.current.magicStacks + 1);
+                            if (stats.current.magicStacks > oldStacks) {
+                                stats.current.weaponsUpgraded = (stats.current.weaponsUpgraded || 0) + 1;
+                                showTrophyProgress('upgrade_me');
+                            }
                             triggerWeaponLevelUpAnimation(pickedName, true, stats.current.magicStacks);
                         } else {
                             stats.current.magicWeapon = pickedName;
@@ -5510,8 +6471,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         }
 
         // HP & MP Regen
-        const mpRegen = 0.06 * (1 + finalMpRegenBoost / 100);
-        stats.current.mp = Math.min(stats.current.maxMp, stats.current.mp + mpRegen);
+        const mpRegenPerSecond = 10.0 * (1 + finalMpRegenBoost / 100);
+        stats.current.mp = Math.min(stats.current.maxMp, stats.current.mp + (mpRegenPerSecond / 60) * timeScale);
 
         if (stats.current.hp < stats.current.maxHp && stats.current.hpRegen > 0) {
             stats.current.hp = Math.min(stats.current.maxHp, stats.current.hp + (stats.current.hpRegen / 60) * timeScale);
@@ -5577,17 +6538,40 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         let mobText = '';
         let mobHpRatio = 0;
         let isMobActive = false;
+        let isInRange = false;
         if (mobInfo) {
             const entry = ENEMY_NAMES[mobInfo.type];
             mobText = `${entry ? entry[lang] : mobInfo.type} Lv.${mobInfo.level}`;
             const activeMob = mobInfo.id ? enemies.current.find(e => e.id === mobInfo.id) : null;
-            if (activeMob) {
+            const isAlive = activeMob && activeMob.hp > 0;
+
+            if (isAlive) {
+                mobInfo.deathTime = null; // reset if somehow reactivated
                 mobHpRatio = Math.max(0, activeMob.hp / (activeMob.maxHp || 1));
                 isMobActive = true;
                 
                 const distPx = Math.hypot(activeMob.x - player.current.x, activeMob.y - player.current.y);
                 const distMeters = Math.round(distPx / 32); // Each tile (64px) is about 2 meters
                 mobText += ` <span style="font-size: 0.85em; opacity: 0.8; margin-left: 4px; font-variant-numeric: tabular-nums;">${distMeters}m</span>`;
+
+                const wp = WEAPONS[st.physicalWeapon] || WEAPONS['Spada Base'];
+                const weaponReach = wp.range || 100;
+                if (distPx <= weaponReach * 1.15) { 
+                    isInRange = true;
+                }
+            } else {
+                if (mobInfo.deathTime === null || mobInfo.deathTime === undefined) {
+                    mobInfo.deathTime = Date.now();
+                }
+                const elapsedSinceDeath = Date.now() - mobInfo.deathTime;
+                if (elapsedSinceDeath < 5000) {
+                    isMobActive = true;
+                    mobHpRatio = 0;
+                    const isIt = settingsRef.current.language === 'it';
+                    mobText += ` <span style="font-size: 0.85em; color: #ef4444; opacity: 0.8; margin-left: 4px; font-variant-numeric: tabular-nums; font-weight: bold; letter-spacing: 0.05em;">(${isIt ? 'SCONFITTO' : 'DEFEATED'})</span>`;
+                } else {
+                    isMobActive = false;
+                }
             }
         }
         
@@ -5621,20 +6605,27 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             }
 
             e.innerHTML = isMobActive ? `
-                <div style="display: flex; align-items: center; justify-content: center; gap: 6px;">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: #ef4444; filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.5));">
+                <div style="display: flex; align-items: center; justify-content: center; gap: 6px; ${isInRange ? 'color: #ff4444;' : ''}">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="color: ${isInRange ? '#ff4444' : '#ef4444'}; filter: drop-shadow(0 0 2px ${isInRange ? 'rgba(255, 68, 68, 0.8)' : 'rgba(239, 68, 68, 0.5)'});">
                         <circle cx="12" cy="12" r="10"></circle>
                         <circle cx="12" cy="12" r="3"></circle>
                     </svg>
                     <div style="display: flex; align-items: center;">${typeIcon}${mobText}</div>
+                    ${isInRange ? '<span style="font-size: 8px; margin-left: 4px; color: #ff4444; font-weight: 900; letter-spacing: 0.1em; animate-pulse">LOCKED</span>' : ''}
                 </div>
                 <div style="width: 100px; height: 4px; background: rgba(0,0,0,0.5); border: 1px solid #444; border-radius: 2px; overflow: hidden; margin-top: 4px;">
-                    <div style="width: ${mobHpRatio * 100}%; height: 100%; background: #ef4444; transition: width 0.1s linear;"></div>
+                    <div style="width: ${mobHpRatio * 100}%; height: 100%; background: ${isInRange ? '#ff0000' : '#ef4444'}; transition: width 0.1s linear;"></div>
                 </div>
             ` : (e.innerHTML || ''); // Keep content during fade out for smoother visual
             e.style.opacity = isMobActive ? '1' : '0';
-            e.style.transform = isMobActive ? 'translate(-50%, 0)' : 'translate(-50%, 20px)';
-            e.style.textShadow = isMobActive ? '0 0 8px rgba(0, 255, 255, 0.4), 0 0 2px rgba(34, 211, 238, 0.2)' : 'none';
+            
+            const pulseRate = isInRange ? 150 : 400;
+            const pulse = Math.sin(Date.now() / pulseRate) * 0.5 + 0.5; // 0 to 1
+            const shadowIntensity = (isInRange ? 0.4 : 0.2) + pulse * (isInRange ? 0.6 : 0.4);
+            const shadowColor = isInRange ? 'rgba(255, 68, 68, ' : 'rgba(0, 255, 255, ';
+
+            e.style.transform = isMobActive ? `translate(-50%, 0) scale(${isInRange ? 1.05 + pulse * 0.05 : 1})` : 'translate(-50%, 20px)';
+            e.style.textShadow = isMobActive ? `0 0 ${4 + pulse * (isInRange ? 12 : 8)}px ${shadowColor}${shadowIntensity}), 0 0 2px rgba(34, 211, 238, 0.2)` : 'none';
         });
         el('nearby-loot-text', e => {
             const wName = nearbyWeaponRef.current;
@@ -5649,6 +6640,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                         : `DEFEAT ENEMIES TO PICK UP ${w.name.toUpperCase()}`;
                     e.textContent = msg;
                     e.style.color = '#ef4444';
+                    e.classList.remove('animate-pulse');
                 } else {
                     const label = settingsRef.current.language === 'it' 
                         ? (isOwned ? `POTENZIA ${w.name.toUpperCase()}` : `RACCOGLI ${w.name.toUpperCase()}`)
@@ -5656,10 +6648,16 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     const keyLabel = settingsRef.current.language === 'it' ? 'PREMI ATK' : 'PRESS ATK';
                     e.textContent = `${label} [${keyLabel}]`;
                     e.style.color = '#facc15';
+                    if (isOwned) {
+                        e.classList.add('animate-pulse');
+                    } else {
+                        e.classList.remove('animate-pulse');
+                    }
                 }
                 e.style.opacity = '1';
             } else {
                 e.style.opacity = '0';
+                e.classList.remove('animate-pulse');
             }
         });
         
@@ -5719,6 +6717,9 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         
         ctx.globalAlpha = 1.0;
 
+        const camX = cx;
+        const camY = cy;
+
         ctx.save();
         ctx.translate(cx, cy);
 
@@ -5726,7 +6727,15 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         const isAlienLevel = stats.current.dungeonLevel % 10 === 0 && stats.current.dungeonLevel > 0;
         
         dungeon.current.forEach((row, y) => {
+            const screenY = y * GRID_SIZE + camY;
+            if (screenY < -GRID_SIZE * 2 || screenY > canvas.height + GRID_SIZE * 2) {
+                return;
+            }
             row.forEach((cell, x) => {
+                const screenX = x * GRID_SIZE + camX;
+                if (screenX < -GRID_SIZE * 2 || screenX > canvas.width + GRID_SIZE * 2) {
+                    return;
+                }
                 const secretRoomIdx = cell === 4 ? secretTileToRoom.current[`${y}_${x}`] : undefined;
                 const isRevealed = secretRoomIdx !== undefined ? revealedRooms.current.has(secretRoomIdx) : true;
                 const revealAlpha = secretRoomIdx !== undefined ? (revealOpacities.current[secretRoomIdx] ?? 1.0) : 0;
@@ -6139,6 +7148,13 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             currentDungeon.current.torches.forEach(t => {
                 const tx = t.gridX * GRID_SIZE + GRID_SIZE / 2;
                 const ty = t.gridY * GRID_SIZE + GRID_SIZE / 2;
+                const screenX = tx + camX;
+                const screenY = ty + camY;
+                const rad = GRID_SIZE * 2.5 + 5;
+                if (screenX < -rad || screenX > canvas.width + rad ||
+                    screenY < -rad || screenY > canvas.height + rad) {
+                    return;
+                }
                 const flicker = Math.sin(time * 8 + t.phase) * 2;
                 
                 // Floor glow
@@ -6169,8 +7185,20 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
         // Chests
         chests.current.forEach(c => {
-            const cx = c.gridX * GRID_SIZE + GRID_SIZE / 2;
-            const cy = c.gridY * GRID_SIZE + GRID_SIZE / 2;
+            const chestX = c.gridX * GRID_SIZE + GRID_SIZE / 2;
+            const chestY = c.gridY * GRID_SIZE + GRID_SIZE / 2;
+            
+            // Offscreen culling check
+            const screenX = chestX + camX;
+            const screenY = chestY + camY;
+            const size = 32;
+            if (screenX < -size || screenX > canvas.width + size ||
+                screenY < -size || screenY > canvas.height + size) {
+                return;
+            }
+
+            const cx = chestX;
+            const cy = chestY;
             
             // Visibility Check
             const sIdx = secretTileToRoom.current[`${c.gridY}_${c.gridX}`];
@@ -6228,6 +7256,15 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
         // Loot
         loot.current.forEach(l => {
+            // Offscreen culling check
+            const screenX = l.x + camX;
+            const screenY = l.y + camY;
+            const size = 30;
+            if (screenX < -size || screenX > canvas.width + size ||
+                screenY < -size || screenY > canvas.height + size) {
+                return;
+            }
+
             // Visibility Check
             const lgx = Math.floor(l.x / GRID_SIZE);
             const lgy = Math.floor(l.y / GRID_SIZE);
@@ -6704,16 +7741,16 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     const isAstral = eqWeapon.id === 'astral_spear';
                     // Spear Handle
                     ctx.fillStyle = isAstral ? '#1a365d' : '#444';
-                    ctx.fillRect(-1.5, isAstral ? -25 : -5, 3, isAstral ? 40 : 20);
+                    ctx.fillRect(isAstral ? -1.0 : -1.5, isAstral ? -16 : -5, isAstral ? 2.0 : 3, isAstral ? 30 : 20);
                     // Spear Tip
                     ctx.fillStyle = eqWeapon.color;
                     ctx.beginPath();
-                    ctx.moveTo(-4, isAstral ? -25 : -5);
-                    ctx.lineTo(0, isAstral ? -45 : -18);
-                    ctx.lineTo(4, isAstral ? -25 : -5);
+                    ctx.moveTo(isAstral ? -3 : -4, isAstral ? -16 : -5);
+                    ctx.lineTo(0, isAstral ? -31 : -18);
+                    ctx.lineTo(isAstral ? 3 : 4, isAstral ? -16 : -5);
                     ctx.fill();
                     // Glow effect
-                    ctx.shadowBlur = isAstral ? 20 : 10;
+                    ctx.shadowBlur = isAstral ? 6 : 10;
                     ctx.shadowColor = eqWeapon.color;
                     ctx.strokeStyle = '#fff';
                     ctx.lineWidth = 1;
@@ -6722,7 +7759,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     if (isAstral) {
                         ctx.fillStyle = '#ffffff';
                         ctx.beginPath();
-                        ctx.arc(0, -32, 2, 0, Math.PI * 2);
+                        ctx.arc(0, -22, 1.2, 0, Math.PI * 2);
                         ctx.fill();
                         ctx.shadowBlur = 0;
                     }
@@ -6734,6 +7771,23 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     ctx.beginPath();
                     ctx.arc(0, -4, 4, 0, Math.PI * 2);
                     ctx.fill();
+
+                    // Whip chain extension during attack
+                    if (player.current.attackCd > 0) {
+                        const progress = 1 - (player.current.attackCd / (eqWeapon.cooldown * 0.8));
+                        const length = Math.sin(progress * Math.PI) * 192;
+                        ctx.strokeStyle = '#883333';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.moveTo(0, -4);
+                        ctx.lineTo(0, -length);
+                        ctx.stroke();
+                        // Whip tip
+                        ctx.fillStyle = '#ff3333';
+                        ctx.beginPath();
+                        ctx.arc(0, -length, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
                 } else { // Sword
                     ctx.fillRect(-1, -12, 3, 18);
                     ctx.fillRect(-5, 0, 11, 3);
@@ -6908,19 +7962,19 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     ctx.moveTo(player.current.x - Math.cos(centerAngle) * rBack, player.current.y - Math.sin(centerAngle) * rBack);
                     ctx.lineTo(player.current.x + Math.cos(centerAngle) * rFwd, player.current.y + Math.sin(centerAngle) * rFwd);
                     const isSpear = equippedWeapon.id.includes('spear');
-                    ctx.shadowBlur = isSpear ? 5 : 20;
+                    ctx.shadowBlur = equippedWeapon.special_behavior === 'astral_thrust' ? 3 : (isSpear ? 5 : 20);
                     ctx.shadowColor = equippedWeapon.color;
                     ctx.strokeStyle = equippedWeapon.color;
-                    ctx.lineWidth = (equippedWeapon.special_behavior === 'astral_thrust' ? 14 : (isSpear ? 4 : 10)) + s * 2;
+                    ctx.lineWidth = (equippedWeapon.special_behavior === 'astral_thrust' ? 5 : (isSpear ? 4 : 10)) + s * 1;
                     ctx.globalAlpha = (1 - prog) * alphaMult;
                     ctx.stroke();
                     
                     if (equippedWeapon.special_behavior === 'astral_thrust') {
                         ctx.strokeStyle = '#00ffff';
-                        ctx.lineWidth = 10;
+                        ctx.lineWidth = 3 + s * 0.5;
                         ctx.stroke();
                         ctx.strokeStyle = '#ffffff';
-                        ctx.lineWidth = 4;
+                        ctx.lineWidth = 1 + s * 0.2;
                         ctx.stroke();
                         
                         // Extra sparkles during thrust
@@ -7049,7 +8103,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                             inArea = Math.abs(perp) < thickness && dot > -rBack && dot < rFwd;
                                         } else {
                                             const thickness = equippedWeapon.special_behavior === 'astral_thrust' ? 50 : 30;
-                                            inArea = Math.abs(perp) < thickness && dot > -80 && dot < reach + 30;
+                                            inArea = Math.abs(perp) < thickness && dot > -80 && dot < equippedWeapon.range + 30;
                                         }
                                     } else {
                                         let angle = Math.atan2(p.y - player.current.y, p.x - player.current.x);
@@ -7134,7 +8188,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                     }
                                 }
                                 
-                                if (inAttack) {
+                                if (inAttack && (equippedWeapon.special_behavior !== 'harpoon_whip' || hasLineOfSight(player.current.x, player.current.y, e.x, e.y))) {
                                     // Combo Logic
                                     const now = Date.now();
                                     if (now - player.current.lastHitTime < 1000) {
@@ -7148,7 +8202,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                     player.current.currentAttackHitIds.add(e.id);
                                     
                                     // DAMAGE
-                                    lastHitMobRef.current = { type: e.type, level: e.level, id: e.id, maxHp: e.maxHp };
+                                    lastHitMobRef.current = { type: e.type, level: e.level, id: e.id, maxHp: e.maxHp, hitTime: Date.now(), deathTime: null };
                                     const baseDmg = equippedWeapon.type === 'hammer' ? 25 : 10;
                                     let damage = (baseDmg + stats.current.strength) * (1 + (physicalStacks - 1) * 0.5) * comboMultiplier * (stats.current.physDmgMult || 1);
                                     
@@ -7164,7 +8218,12 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                     spawnDamagePopup(e.x, e.y, actualDamage, e, isCrit, equippedWeapon.color);
 
                                     if (equippedWeapon.special_behavior === 'harpoon_whip') {
-                                        player.current.harpoonedEnemyId = e.id;
+                                        // Check for boss/miniboss
+                                        const isBoss = e.type === 'boss' || e.type === 'miniboss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect';
+                                        if (!isBoss) {
+                                            player.current.harpoonedEnemyId = e.id;
+                                            e.harpoonedDuration = 0;
+                                        }
                                         audio.playHitSound('warrior'); 
                                     }
                                     if (equippedWeapon.special_behavior === 'vampiric') {
@@ -7361,13 +8420,22 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         });
 
         // Enemies
-        drawCorpses(ctx);
+        drawCorpses(ctx, cx, cy, canvas.width, canvas.height);
         enemies.current.forEach(e => {
             // Visibility Check
             const egx = Math.floor(e.x / GRID_SIZE);
             const egy = Math.floor(e.y / GRID_SIZE);
             const seIdx = secretTileToRoom.current[`${egy}_${egx}`];
             if (seIdx !== undefined && !revealedRooms.current.has(seIdx)) return;
+
+            // Offscreen culling check
+            const screenX = e.x + camX;
+            const screenY = e.y + camY;
+            const margin = (e.size || 16) * 2 + 30;
+            if (screenX < -margin || screenX > canvas.width + margin || 
+                screenY < -margin || screenY > canvas.height + margin) {
+                return;
+            }
 
             /* Visual effect for drain: beam removed, now handled by particles */
             /*
@@ -7412,7 +8480,10 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             }
 
             let color = '';
-            if (e.type === 'warrior') {
+            if (e.isRocketTrapped) {
+                const pulse = Math.sin(time * 20) * 0.5 + 0.5;
+                color = pulse > 0.5 ? '#ff4500' : '#ffcc00';
+            } else if (e.type === 'warrior') {
                 color = '#ff3333';
             } else if (e.type === 'archer') {
                 color = '#ff8800';
@@ -7435,8 +8506,14 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             } else if (e.type === 'charger') {
                 color = '#ff4500';
             } else if (e.type === 'bomber') {
-                const pulse = Math.sin(time * 15) * 0.5 + 0.5;
-                color = pulse > 0.5 ? '#ff6600' : '#ff0000';
+                if (e.fuseTimer && e.fuseTimer > 0) {
+                    const rate = e.fuseTimer < 30 ? 45 : 25;
+                    const pulse = Math.sin(time * rate) * 0.5 + 0.5;
+                    color = pulse > 0.5 ? '#ff0000' : '#ffff00';
+                } else {
+                    const pulse = Math.sin(time * 15) * 0.5 + 0.5;
+                    color = pulse > 0.5 ? '#ff6600' : '#ff0000';
+                }
             } else if (e.type === 'teleporter') {
                 color = '#aa00ff';
             } else if (e.type === 'shield_bearer') {
@@ -7740,25 +8817,31 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     ctx.save();
                     ctx.translate(e.x, e.y);
                     
-                    const isMoving = e.state === 'chase' || e.state === 'patrol';
-                    const squash = isMoving ? 1 + Math.abs(Math.sin(time * 15 + e.id)) * 0.12 : 1 + Math.sin(time * 4 + e.id) * 0.04;
-                    const stretch = 1 / squash;
-                    ctx.scale(squash, stretch);
-                    
                     const pixelSize = drawSize / 4;
                     const startX = -drawSize;
                     const startY = -drawSize;
                     
-                    // Simple bobbing animation based on state
-                    const bobY = isMoving ? Math.sin(time * 15 + e.id) * 4 : 0;
-                    
-                    // Calculate offsets for directional aspect
+                    let bobY = 0;
                     let ox = 0, oy = 0;
-                    const aspectOffset = pixelSize;
-                    if (e.dir === 'up') oy = -aspectOffset;
-                    if (e.dir === 'down') oy = aspectOffset;
-                    if (e.dir === 'left') ox = -aspectOffset;
-                    if (e.dir === 'right') ox = aspectOffset;
+                    if (e.isDeadFuse) {
+                        ctx.rotate(Math.PI / 2);
+                        ctx.scale(1.0, 0.7);
+                    } else {
+                        const isMoving = e.state === 'chase' || e.state === 'patrol';
+                        const squash = isMoving ? 1 + Math.abs(Math.sin(time * 15 + e.id)) * 0.12 : 1 + Math.sin(time * 4 + e.id) * 0.04;
+                        const stretch = 1 / squash;
+                        ctx.scale(squash, stretch);
+                        
+                        // Simple bobbing animation based on state
+                        bobY = isMoving ? Math.sin(time * 15 + e.id) * 4 : 0;
+                        
+                        // Calculate offsets for directional aspect
+                        const aspectOffset = pixelSize;
+                        if (e.dir === 'up') oy = -aspectOffset;
+                        if (e.dir === 'down') oy = aspectOffset;
+                        if (e.dir === 'left') ox = -aspectOffset;
+                        if (e.dir === 'right') ox = aspectOffset;
+                    }
 
                     for (let r = 0; r < 8; r++) {
                         for (let c = 0; c < 8; c++) {
@@ -7810,6 +8893,84 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 }
             }
 
+            // Bomber fuse burning graphic animation
+            if (e.type === 'bomber' && e.fuseTimer !== undefined && e.fuseTimer > 0) {
+                ctx.save();
+                
+                let fxSource = e.x;
+                let fySource = e.y - drawSize * 0.8;
+                let fxControlX = e.x + 8;
+                let fxControlY = e.y - drawSize * 1.1;
+                let sparkX = e.x + 10;
+                let sparkY = e.y - drawSize * 1.3;
+
+                if (e.isDeadFuse) {
+                    fxSource = e.x + drawSize * 0.8;
+                    fySource = e.y;
+                    fxControlX = e.x + drawSize * 1.1;
+                    fxControlY = e.y + 8;
+                    sparkX = e.x + drawSize * 1.3;
+                    sparkY = e.y + 10;
+                }
+
+                // Draw fuse wire (quadratic curve)
+                ctx.beginPath();
+                ctx.moveTo(fxSource, fySource);
+                ctx.quadraticCurveTo(fxControlX, fxControlY, sparkX, sparkY);
+                ctx.strokeStyle = '#614d3f';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+                
+                // Draw dynamic spark sizzle lines
+                const numSparks = 5;
+                ctx.strokeStyle = '#ffa500';
+                ctx.lineWidth = 2;
+                for (let i = 0; i < numSparks; i++) {
+                    const ang = (i / numSparks) * Math.PI * 2 + time * 25;
+                    const len = 5 + Math.sin(time * 30 + i) * 3;
+                    ctx.beginPath();
+                    ctx.moveTo(sparkX, sparkY);
+                    ctx.lineTo(sparkX + Math.cos(ang) * len, sparkY + Math.sin(ang) * len);
+                    ctx.stroke();
+                }
+                
+                // Glowing circular center of spark
+                ctx.beginPath();
+                ctx.arc(sparkX, sparkY, 3 + Math.sin(time * 20) * 1.5, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#ffff00';
+                ctx.fill();
+                
+                ctx.restore();
+
+                // Draw high-visibility warning countdown badge above its head
+                ctx.save();
+                ctx.font = 'bold 10px "JetBrains Mono", monospace';
+                ctx.textAlign = 'center';
+                const secondsLeft = (e.fuseTimer / 60).toFixed(1);
+                
+                // Pulsing/flickering offset and scale for critical count
+                const isCritical = e.fuseTimer < 45;
+                const textY = e.y - drawSize * 1.6 + (isCritical ? Math.sin(Date.now() / 20) * 2 : 0);
+                
+                // Draw solid red-orange background badge
+                const badgeText = `⚠️ 💣 ${secondsLeft}s`;
+                const textWidth = ctx.measureText(badgeText).width;
+                ctx.fillStyle = 'rgba(15, 0, 0, 0.75)';
+                ctx.fillRect(e.x - textWidth / 2 - 4, textY - 9, textWidth + 8, 13);
+                
+                // Outer red/yellow border on badge
+                ctx.strokeStyle = isCritical ? '#ef4444' : '#facc15';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(e.x - textWidth / 2 - 4, textY - 9, textWidth + 8, 13);
+                
+                // Draw warning text
+                ctx.fillStyle = isCritical ? '#fc2a2a' : '#facc15';
+                ctx.fillText(badgeText, e.x, textY + 1);
+                ctx.restore();
+            }
+
             if (e.isBubbleTrapped) {
                 ctx.save();
                 ctx.translate(e.x, e.y);
@@ -7835,52 +8996,109 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             }
 
             // HP Bar
-            const barWidth = drawSize * (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect' ? 3 : 2);
-            const barHeight = (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect' ? 8 : 4);
-            const barY = e.y - drawSize - 15;
-            
-            // Border/Background
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            ctx.fillRect(e.x - barWidth / 2, barY, barWidth, barHeight);
-            
-            if (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect') {
-                ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 1;
-                ctx.strokeRect(e.x - barWidth / 2 - 1, barY - 1, barWidth + 2, barHeight + 2);
-            }
+            if (!e.isDeadFuse) {
+                const isBossOrMiniboss = e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect' || e.type === 'miniboss';
+                const isDamaged = e.hp < e.maxHp;
+                const distToPlayer = Math.hypot(player.current.x - e.x, player.current.y - e.y);
+                const isNearby = distToPlayer < 150;
 
-            ctx.fillStyle = (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect') ? '#ff0000' : color;
-            ctx.fillRect(e.x - barWidth / 2, barY, barWidth * Math.max(0, e.hp / e.maxHp), barHeight);
-            
-            // HP Text for Bosses
-            if (e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect') {
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 10px Courier New';
-                ctx.textAlign = 'center';
-                const hpText = `${Math.ceil(e.hp)} / ${e.maxHp}`;
-                ctx.fillText(hpText, e.x, barY - 5);
-                
-                // Mythic Title
-                if (stats.current.dungeonLevel >= 1) { // Show name for all bosses
-                    ctx.fillStyle = '#FFD700';
-                    ctx.font = 'bold 12px Courier New';
-                    const names: Record<string, string> = {
-                        boss: 'NEON OVERLORD',
-                        slimmy: 'KING SLIME',
-                        serpent: 'ELDER SERPENT',
-                        shadow_reaper: 'SHADOW REAPER',
-                        void_architect: 'VOID ARCHITECT'
-                    };
-                    const title = names[e.type] || 'BOSS';
-                    ctx.fillText(title, e.x, barY - 20);
+                let opacity = 1.0;
+                if (!isBossOrMiniboss) {
+                    if (isDamaged) {
+                        opacity = 1.0;
+                    } else if (isNearby) {
+                        // Fade out smoothly as they get further from 80px to 150px
+                        opacity = Math.max(0, Math.min(1, (150 - distToPlayer) / 70));
+                    } else {
+                        opacity = 0;
+                    }
                 }
-                
-                ctx.textAlign = 'start'; // reset
+
+                if (opacity > 0) {
+                    ctx.save();
+                    ctx.globalAlpha *= opacity;
+
+                    const isBoss = e.type === 'boss' || e.type === 'slimmy' || e.type === 'serpent' || e.type === 'shadow_reaper' || e.type === 'void_architect';
+                    const barWidth = drawSize * (isBoss ? 3 : 2);
+                    const barHeight = (isBoss ? 8 : 4);
+                    const barY = e.y - drawSize - 15;
+                    
+                    // Border/Background
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(e.x - barWidth / 2, barY, barWidth, barHeight);
+                    
+                    if (isBoss) {
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(e.x - barWidth / 2 - 1, barY - 1, barWidth + 2, barHeight + 2);
+                    } else {
+                        // High-contrast clean thin border for normal enemies
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                        ctx.lineWidth = 0.5;
+                        ctx.strokeRect(e.x - barWidth / 2 - 0.5, barY - 0.5, barWidth + 1, barHeight + 1);
+                    }
+
+                    // HP percentage
+                    const hpPct = Math.max(0, e.hp / e.maxHp);
+
+                    // Dynamic color for normal enemies based on health (Green -> Yellow -> Red)
+                    let barColor = color; // fallback
+                    if (!isBoss) {
+                        if (hpPct > 0.6) {
+                            barColor = '#10b981'; // vibrant emerald green
+                        } else if (hpPct > 0.25) {
+                            barColor = '#eab308'; // golden yellow
+                        } else {
+                            barColor = '#ef4444'; // combat crimson red
+                        }
+                    } else {
+                        barColor = '#ff0000';
+                    }
+
+                    ctx.fillStyle = barColor;
+                    ctx.fillRect(e.x - barWidth / 2, barY, barWidth * hpPct, barHeight);
+                    
+                    // HP Text for Bosses
+                    if (isBoss) {
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = 'bold 10px Courier New';
+                        ctx.textAlign = 'center';
+                        const hpText = `${Math.ceil(e.hp)} / ${e.maxHp}`;
+                        ctx.fillText(hpText, e.x, barY - 5);
+                        
+                        // Mythic Title
+                        if (stats.current.dungeonLevel >= 1) { // Show name for all bosses
+                            ctx.fillStyle = '#FFD700';
+                            ctx.font = 'bold 12px Courier New';
+                            const names: Record<string, string> = {
+                                boss: 'NEON OVERLORD',
+                                slimmy: 'KING SLIME',
+                                serpent: 'ELDER SERPENT',
+                                shadow_reaper: 'SHADOW REAPER',
+                                void_architect: 'VOID ARCHITECT'
+                            };
+                            const title = names[e.type] || 'BOSS';
+                            ctx.fillText(title, e.x, barY - 20);
+                        }
+                        
+                        ctx.textAlign = 'start'; // reset
+                    }
+                    ctx.restore();
+                }
             }
         });
 
         // Projectiles
         projectiles.current.forEach(p => {
+            // Offscreen culling check
+            const screenX = p.x + camX;
+            const screenY = p.y + camY;
+            const size = (p.size || 8) * 3 + 20;
+            if (screenX < -size || screenX > canvas.width + size ||
+                screenY < -size || screenY > canvas.height + size) {
+                return;
+            }
+
             let pColor = p.color ? p.color : (p.isEnemy ? '#ff4444' : '#aa88ff');
 
             // Trails
@@ -8051,12 +9269,14 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 ctx.translate(p.x, p.y);
                 ctx.rotate(rot);
                 ctx.fillStyle = pColor;
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = '#00ffff';
+                ctx.shadowBlur = p.isLegendaryStar ? 25 : 15;
+                ctx.shadowColor = p.isLegendaryStar ? '#ffd700' : '#00ffff';
                 ctx.beginPath();
+                const outerRadius = p.isLegendaryStar ? 14 : 6;
+                const innerRadius = p.isLegendaryStar ? 6 : 2.5;
                 for (let i = 0; i < 5; i++) {
-                    ctx.lineTo(Math.cos((18 + i * 72) / 180 * Math.PI) * 6, -Math.sin((18 + i * 72) / 180 * Math.PI) * 6);
-                    ctx.lineTo(Math.cos((54 + i * 72) / 180 * Math.PI) * 2.5, -Math.sin((54 + i * 72) / 180 * Math.PI) * 2.5);
+                    ctx.lineTo(Math.cos((18 + i * 72) / 180 * Math.PI) * outerRadius, -Math.sin((18 + i * 72) / 180 * Math.PI) * outerRadius);
+                    ctx.lineTo(Math.cos((54 + i * 72) / 180 * Math.PI) * innerRadius, -Math.sin((54 + i * 72) / 180 * Math.PI) * innerRadius);
                 }
                 ctx.closePath();
                 ctx.fill();
@@ -8224,6 +9444,62 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     ctx.stroke();
                     
                     ctx.restore();
+                } else if (p.special_behavior === 'homing_rocket') {
+                    const angle = Math.atan2(p.vy, p.vx);
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(angle);
+                    
+                    // Rocket Body
+                    ctx.fillStyle = '#cccccc'; // Metallic gray body
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#ff4500';
+                    
+                    ctx.beginPath();
+                    ctx.roundRect(-10, -4, 20, 8, 2);
+                    ctx.fill();
+                    
+                    // Nose cone
+                    ctx.fillStyle = '#ff0000';
+                    ctx.beginPath();
+                    ctx.moveTo(10, -4);
+                    ctx.lineTo(18, 0);
+                    ctx.lineTo(10, 4);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // Fins
+                    ctx.fillStyle = '#444444';
+                    ctx.beginPath();
+                    ctx.moveTo(-10, -4);
+                    ctx.lineTo(-12, -8);
+                    ctx.lineTo(-6, -4);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(-10, 4);
+                    ctx.lineTo(-12, 8);
+                    ctx.lineTo(-6, 4);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    // Fire/Thrust
+                    const thrustLen = 10 + Math.random() * 10;
+                    const grad = ctx.createLinearGradient(-10, 0, -10 - thrustLen, 0);
+                    grad.addColorStop(0, '#ffff00');
+                    grad.addColorStop(0.5, '#ffa500');
+                    grad.addColorStop(1, 'rgba(255, 69, 0, 0)');
+                    
+                    ctx.fillStyle = grad;
+                    ctx.beginPath();
+                    ctx.moveTo(-10, -2);
+                    ctx.lineTo(-10 - thrustLen, 0);
+                    ctx.lineTo(-10, 2);
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    ctx.restore();
                 } else {
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, pRadius, 0, Math.PI * 2);
@@ -8256,59 +9532,65 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         if (bossKilled.current && portal.current) {
             const px = portal.current.x;
             const py = portal.current.y;
+            // Offscreen culling check
+            const screenX = px + camX;
+            const screenY = py + camY;
             const size = 32;
+            if (screenX >= -size * 2 && screenX <= canvas.width + size * 2 &&
+                screenY >= -size * 2 && screenY <= canvas.height + size * 2) {
 
-            // Dark hole for stairs
-            ctx.fillStyle = '#0a0a0d';
-            ctx.fillRect(px - size/2, py - size/2, size, size);
-            
-            // Steps descending
-            for(let i=0; i<4; i++) {
-                const stepY = py - size/2 + i * (size/4);
-                const stepH = size/4 - 2;
-                ctx.fillStyle = `rgba(30, 30, 50, ${1.0 - (i * 0.2)})`;
-                ctx.fillRect(px - size/2 + i, stepY, size - i*2, stepH);
-            }
+                // Dark hole for stairs
+                ctx.fillStyle = '#0a0a0d';
+                ctx.fillRect(px - size/2, py - size/2, size, size);
+                
+                // Steps descending
+                for(let i=0; i<4; i++) {
+                    const stepY = py - size/2 + i * (size/4);
+                    const stepH = size/4 - 2;
+                    ctx.fillStyle = `rgba(30, 30, 50, ${1.0 - (i * 0.2)})`;
+                    ctx.fillRect(px - size/2 + i, stepY, size - i*2, stepH);
+                }
 
-            // Frame of the hatch
-            ctx.strokeStyle = '#3d2b1f';
-            ctx.lineWidth = 4;
-            ctx.strokeRect(px - size/2, py - size/2, size, size);
+                // Frame of the hatch
+                ctx.strokeStyle = '#3d2b1f';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(px - size/2, py - size/2, size, size);
 
-            // Open wooden door
-            ctx.fillStyle = '#4a3728';
-            ctx.save();
-            ctx.translate(px + size * 0.4, py - size * 0.1);
-            ctx.rotate(Math.PI / 4); // Slanted open door
-            ctx.fillRect(0, -size/2, size * 0.8, size);
-            
-            // Door details (wood planks)
-            ctx.strokeStyle = '#2d1f14';
-            ctx.lineWidth = 1;
-            for(let i=1; i<4; i++) {
-                const plankX = i * (size * 0.8 / 4);
+                // Open wooden door
+                ctx.fillStyle = '#4a3728';
+                ctx.save();
+                ctx.translate(px + size * 0.4, py - size * 0.1);
+                ctx.rotate(Math.PI / 4); // Slanted open door
+                ctx.fillRect(0, -size/2, size * 0.8, size);
+                
+                // Door details (wood planks)
+                ctx.strokeStyle = '#2d1f14';
+                ctx.lineWidth = 1;
+                for(let i=1; i<4; i++) {
+                    const plankX = i * (size * 0.8 / 4);
+                    ctx.beginPath();
+                    ctx.moveTo(plankX, -size/2);
+                    ctx.lineTo(plankX, size/2);
+                    ctx.stroke();
+                }
+                // Iron handle
+                ctx.strokeStyle = '#777';
+                ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(plankX, -size/2);
-                ctx.lineTo(plankX, size/2);
+                ctx.arc(size * 0.4, 0, 4, 0, Math.PI * 2);
                 ctx.stroke();
-            }
-            // Iron handle
-            ctx.strokeStyle = '#777';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(size * 0.4, 0, 4, 0, Math.PI * 2);
-            ctx.stroke();
 
-            ctx.restore();
-            
-            // Glow effect
-            ctx.globalCompositeOperation = 'screen';
-            const hatchGlow = ctx.createRadialGradient(px, py, 0, px, py, size * 1.5);
-            hatchGlow.addColorStop(0, 'rgba(100, 200, 255, 0.1)');
-            hatchGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
-            ctx.fillStyle = hatchGlow;
-            ctx.fill();
-            ctx.globalCompositeOperation = 'source-over';
+                ctx.restore();
+                
+                // Glow effect
+                ctx.globalCompositeOperation = 'screen';
+                const hatchGlow = ctx.createRadialGradient(px, py, 0, px, py, size * 1.5);
+                hatchGlow.addColorStop(0, 'rgba(100, 200, 255, 0.1)');
+                hatchGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                ctx.fillStyle = hatchGlow;
+                ctx.fill();
+                ctx.globalCompositeOperation = 'source-over';
+            }
         }
 
         // Draw Damage Popups
@@ -8318,6 +9600,14 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 damagePopups.current.splice(index, 1);
                 return;
             }
+            // Offscreen culling check
+            const screenX = p.x + camX;
+            const screenY = p.y + camY;
+            if (screenX < -30 || screenX > canvas.width + 30 ||
+                screenY < -30 || screenY > canvas.height + 30) {
+                return;
+            }
+
             const alpha = elapsed > 1000 ? (1 - (elapsed - 1000) / 500) : 1;
             ctx.save();
             ctx.globalAlpha = alpha;
@@ -8330,8 +9620,9 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         });
 
         // Particles
-        for (let i = particles.current.length - 1; i >= 0; i--) {
+        for (let i = 0; i < particles.current.length; i++) {
             const p = particles.current[i];
+            if (!p.active) continue;
 
             if (p.type === 'vampire_heal') {
                 p.targetX = player.current.x;
@@ -8343,7 +9634,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                const dy = p.targetY - p.y;
                const dist = Math.hypot(dx, dy);
                if (dist < 10) {
-                   p.life = p.maxLife; // Kill it
+                   p.active = false;
+                   continue;
                } else {
                    const speed = 10;
                    p.vx = (dx / dist) * speed;
@@ -8364,69 +9656,75 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
             p.life++;
             if (p.life >= p.maxLife) {
-                particles.current.splice(i, 1);
+                p.active = false;
                 continue;
             }
-            if (p.text !== undefined) {
-                ctx.save();
-                ctx.globalAlpha = 1 - (p.life / p.maxLife);
-                ctx.fillStyle = p.color;
-                ctx.font = p.fontSize ? `bold ${p.fontSize}px Arial` : 'bold 16px Arial';
-                ctx.shadowColor = '#000000';
-                ctx.shadowBlur = 6;
-                ctx.textAlign = 'center';
-                ctx.fillText(p.text, p.x, p.y);
-                ctx.restore();
-            } else if (p.type === 'shockwave') {
-                ctx.strokeStyle = p.color;
-                ctx.lineWidth = 4 * (1 - (p.life / p.maxLife));
-                ctx.globalAlpha = 1 - (p.life / p.maxLife);
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
-                ctx.stroke();
-            } else if (p.type === 'star') {
-                ctx.save();
-                ctx.globalAlpha = 1 - (p.life / p.maxLife);
-                ctx.translate(p.x, p.y);
-                if (p.rotation !== undefined) ctx.rotate(p.rotation);
-                ctx.fillStyle = p.color;
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = p.color;
-                
-                ctx.beginPath();
-                for (let j = 0; j < 5; j++) {
-                    ctx.lineTo(Math.cos((18 + j * 72) / 180 * Math.PI) * p.size,
-                               -Math.sin((18 + j * 72) / 180 * Math.PI) * p.size);
-                    ctx.lineTo(Math.cos((54 + j * 72) / 180 * Math.PI) * (p.size * 0.4),
-                               -Math.sin((54 + j * 72) / 180 * Math.PI) * (p.size * 0.4));
-                }
-                ctx.closePath();
-                ctx.fill();
-                ctx.restore();
-            } else {
-                ctx.save();
-                ctx.globalAlpha = 1 - (p.life / p.maxLife);
-                ctx.translate(p.x, p.y);
-                if (p.rotation !== undefined) {
-                    ctx.rotate(p.rotation);
-                }
-                ctx.fillStyle = p.color;
-                
-                // Add glow for spell particles
-                if (p.maxLife > 20 && p.size > 2) {
+
+            const isOffscreen = (p.x + camX < -50 || p.x + camX > canvas.width + 50 ||
+                                 p.y + camY < -50 || p.y + camY > canvas.height + 50);
+
+            if (!isOffscreen) {
+                if (p.text !== undefined) {
+                    ctx.save();
+                    ctx.globalAlpha = 1 - (p.life / p.maxLife);
+                    ctx.fillStyle = p.color;
+                    ctx.font = p.fontSize ? `bold ${p.fontSize}px Arial` : 'bold 16px Arial';
+                    ctx.shadowColor = '#000000';
+                    ctx.shadowBlur = 6;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(p.text, p.x, p.y);
+                    ctx.restore();
+                } else if (p.type === 'shockwave') {
+                    ctx.strokeStyle = p.color;
+                    ctx.lineWidth = 4 * (1 - (p.life / p.maxLife));
+                    ctx.globalAlpha = 1 - (p.life / p.maxLife);
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
+                    ctx.stroke();
+                } else if (p.type === 'star') {
+                    ctx.save();
+                    ctx.globalAlpha = 1 - (p.life / p.maxLife);
+                    ctx.translate(p.x, p.y);
+                    if (p.rotation !== undefined) ctx.rotate(p.rotation);
+                    ctx.fillStyle = p.color;
                     ctx.shadowBlur = 10;
                     ctx.shadowColor = p.color;
-                }
-                
-                if (p.rotation !== undefined) {
-                    // Rectangular particle if rotated
-                    ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size);
-                } else {
+                    
                     ctx.beginPath();
-                    ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+                    for (let j = 0; j < 5; j++) {
+                        ctx.lineTo(Math.cos((18 + j * 72) / 180 * Math.PI) * p.size,
+                                   -Math.sin((18 + j * 72) / 180 * Math.PI) * p.size);
+                        ctx.lineTo(Math.cos((54 + j * 72) / 180 * Math.PI) * (p.size * 0.4),
+                                   -Math.sin((54 + j * 72) / 180 * Math.PI) * (p.size * 0.4));
+                    }
+                    ctx.closePath();
                     ctx.fill();
+                    ctx.restore();
+                } else {
+                    ctx.save();
+                    ctx.globalAlpha = 1 - (p.life / p.maxLife);
+                    ctx.translate(p.x, p.y);
+                    if (p.rotation !== undefined) {
+                        ctx.rotate(p.rotation);
+                    }
+                    ctx.fillStyle = p.color;
+                    
+                    // Add glow for spell particles
+                    if (p.maxLife > 20 && p.size > 2) {
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = p.color;
+                    }
+                    
+                    if (p.rotation !== undefined) {
+                        // Rectangular particle if rotated
+                        ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size);
+                    } else {
+                        ctx.beginPath();
+                        ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.restore();
                 }
-                ctx.restore();
             }
         }
         ctx.globalAlpha = 1.0;
@@ -8434,7 +9732,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         ctx.restore();
         
         // Evaluate Loot Summary first so we can adjust Minimap position
-        const lootSummary: Record<string, { count: number, color: string }> = {};
+        const lootSummary: Record<string, { count: number, color: string, isEquipped?: boolean }> = {};
         loot.current.forEach(l => {
             const lgx = Math.floor(l.x / GRID_SIZE);
             const lgy = Math.floor(l.y / GRID_SIZE);
@@ -8443,7 +9741,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
             const name = l.name || (l.type === 'gold' ? 'Oro' : (l.type.startsWith('potion') ? 'Pozione' : l.type));
             if (!lootSummary[name]) {
-                lootSummary[name] = { count: 0, color: l.rarityColor || l.color };
+                const isEquipped = l.type === 'weapon' && l.name && (l.name === stats.current.physicalWeapon || l.name === stats.current.magicWeapon);
+                lootSummary[name] = { count: 0, color: l.rarityColor || l.color, isEquipped: !!isEquipped };
             }
             lootSummary[name].count++;
         });
@@ -8506,6 +9805,41 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             }
         });
         
+        // Draw equipped weapons on the ground on minimap
+        ctx.save();
+        loot.current.forEach(l => {
+            if (l.type === 'weapon' && l.name && (l.name === stats.current.physicalWeapon || l.name === stats.current.magicWeapon)) {
+                const lgx = Math.floor(l.x / GRID_SIZE);
+                const lgy = Math.floor(l.y / GRID_SIZE);
+                const slIdx = secretTileToRoom.current[`${lgy}_${lgx}`];
+                if (slIdx !== undefined && !revealedRooms.current.has(slIdx)) return;
+
+                const tx = l.x / GRID_SIZE;
+                const ty = l.y / GRID_SIZE;
+                
+                // Pulsing size and shadow for high visibility/blinking effect
+                const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 150);
+                const color = l.borderColor || l.rarityColor || l.color || '#fbbf24';
+                
+                ctx.fillStyle = color;
+                ctx.shadowBlur = 4 + 6 * pulse;
+                ctx.shadowColor = color;
+                
+                // Draw a small blinking circle
+                ctx.beginPath();
+                ctx.arc(mapStartX + tx * cellSize, mapStartY + ty * cellSize, 3 + pulse, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw a high contrast white inner core
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 0;
+                ctx.beginPath();
+                ctx.arc(mapStartX + tx * cellSize, mapStartY + ty * cellSize, 1.5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+        ctx.restore();
+        
         // Draw player dot on minimap
         ctx.fillStyle = '#fff';
         ctx.shadowBlur = 5;
@@ -8533,11 +9867,17 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 const text = `${name}${item.count > 1 ? ` x${item.count}` : ''}`;
                 const yPos = lootListYStart + i * 18;
                 
+                ctx.save();
+                if (item.isEquipped) {
+                    ctx.globalAlpha = 0.35 + 0.65 * Math.sin(Date.now() / 150);
+                }
+                
                 ctx.fillStyle = 'rgba(0,0,0,0.6)';
                 ctx.fillText(text, lootListX + 1, yPos + 1);
                 
                 ctx.fillStyle = item.color;
                 ctx.fillText(text, lootListX, yPos);
+                ctx.restore();
             });
             ctx.restore();
         }
@@ -8633,6 +9973,8 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
 
         if (stats.current.hp <= 0 && !isGameOver.current) {
             isGameOver.current = true;
+            localStorage.removeItem('player_stats');
+            localStorage.removeItem('game_interrupted');
             audio.playGameOverMusic();
             setGameOverData({ 
                 score: stats.current.score, 
@@ -8693,6 +10035,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             critDamage={hudStats.critDamage}
             cooldownReduction={hudStats.cooldownReduction}
             attackSpeed={hudStats.attackSpeed}
+            highlightedStats={highlightedStats}
             onOpenSkills={() => {
                 setShowSkillTree(true);
                 pauseRef.current = true;
@@ -8700,6 +10043,16 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
             onOpenBestiary={() => {
                 setShowBestiary(true);
                 pauseRef.current = true;
+            }}
+            onOpenTrophies={() => {
+                setShowTrophies(true);
+                pauseRef.current = true;
+            }}
+            onPause={() => {
+                if (!isPaused && !isGameOver.current && !showShop && !showSkillTree && !showLevelUpSlots) {
+                    pauseRef.current = true;
+                    setIsPaused(true);
+                }
             }}
         />
 
@@ -8946,6 +10299,7 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                     stats.current.dungeonLevel++;
                     initLevel(stats.current.dungeonLevel);
                 }}
+                onTrophyProgress={showTrophyProgress}
                 isMerchantRoom={isMerchantRoom}
                 language={settingsRef.current.language}
             />
@@ -9007,7 +10361,9 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                 <motion.div 
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="bg-slate-900/90 border-x-4 border-cyan-500/50 p-4 rounded-xl shadow-[0_0_50px_rgba(0,255,255,0.2)] flex flex-col gap-2 text-center w-[90vw] max-w-[300px] relative overflow-hidden"
+                    className={`bg-slate-900/90 border-x-4 border-cyan-500/50 p-4 rounded-xl shadow-[0_0_50px_rgba(0,255,255,0.2)] flex flex-col gap-2 text-center w-[90vw] transition-all duration-300 relative overflow-hidden ${
+                        showOptions === 'slots' ? 'max-w-[750px]' : 'max-w-[300px]'
+                    }`}
                 >
                     <button 
                         onClick={() => { pauseRef.current = false; setIsPaused(false); }}
@@ -9086,6 +10442,25 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                         <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${settingsRef.current.showFps ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
                                     </button>
                                 </div>
+                                <div className="px-2 py-1.5 bg-slate-950/50 border border-slate-800 rounded-md flex justify-between items-center text-xs">
+                                    <span className="font-bold text-slate-400 uppercase">SCANLINES</span>
+                                    <button 
+                                        className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${settingsRef.current.scanlines ? 'bg-pink-500' : 'bg-slate-700'}`}
+                                        onClick={toggleScanlines}
+                                    >
+                                        <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${settingsRef.current.scanlines ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                                    </button>
+                                </div>
+                                 <button
+                                    className="px-3 py-1 bg-red-950/40 border border-red-900/60 hover:border-red-500/50 text-red-400 hover:text-red-300 rounded-md font-bold transition-all flex items-center justify-center gap-2 text-xs"
+                                    onClick={() => {
+                                        stats.current.unlockedTrophies = [];
+                                        localStorage.removeItem('unlocked_trophies');
+                                        alert(settingsRef.current.language === 'it' ? 'Trofei resettati con successo!' : 'Trophies reset successfully!');
+                                    }}
+                                >
+                                    <Trophy className="w-3.5 h-3.5 text-red-500" /> {settingsRef.current.language === 'it' ? 'AZZERA TROFEI' : 'RESET TROPHIES'}
+                                </button>
                                 <button
                                     className="px-3 py-1 bg-slate-950/50 border border-slate-800 hover:border-cyan-500/50 text-cyan-400 hover:text-cyan-300 rounded-md font-bold transition-all flex items-center justify-center gap-2 text-xs"
                                     onClick={() => setShowOptions('controls')}
@@ -9149,6 +10524,134 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                 {settingsRef.current.language === 'it' ? 'AGGIORNA' : 'DEPLOY'}
                             </button>
                         </div>
+                    ) : showOptions === 'slots' ? (
+                        <div className="flex flex-col items-center w-full">
+                            <h2 className="text-xl md:text-2xl text-white font-black italic mb-4 uppercase flex items-center justify-center gap-2 tracking-widest drop-shadow-[0_0_15px_rgba(34,211,238,0.4)]">
+                                <Save className="w-5 h-5 text-cyan-400" />
+                                {settingsRef.current.language === 'it' ? 'SALVATAGGI SLOT' : 'GAME SLOTS'}
+                            </h2>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 w-full max-h-[300px] overflow-y-auto pr-1">
+                                {Array.from({ length: 9 }, (_, i) => {
+                                    const slotNum = i + 1;
+                                    const slotKey = `neon_dungeon_slot_${slotNum}`;
+                                    const raw = localStorage.getItem(slotKey);
+                                    let slotData = null;
+                                    if (raw) {
+                                        try { slotData = JSON.parse(raw); } catch(e){}
+                                    }
+
+                                    return (
+                                        <div 
+                                            key={slotNum} 
+                                            className={`p-2 rounded-xl border text-left flex flex-col justify-between transition-all duration-200 ${
+                                                slotData 
+                                                    ? 'bg-slate-950/80 border-cyan-500/30 hover:border-cyan-500/60' 
+                                                    : 'bg-slate-950/40 border-slate-800/80 hover:border-slate-700'
+                                            }`}
+                                        >
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="text-[9px] uppercase font-black tracking-widest text-cyan-400">
+                                                    SLOT {slotNum}
+                                                </span>
+                                                {slotData && (
+                                                    <span className="text-[8px] text-slate-500 font-bold truncate max-w-[125px]">
+                                                        {new Date(slotData.timestamp).toLocaleDateString(settingsRef.current.language === 'it' ? 'it-IT' : 'en-US')}
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {slotData ? (
+                                                <div className="flex flex-col gap-1 text-[9px] text-slate-300 font-mono mb-2 bg-slate-900/60 p-1 rounded border border-slate-850">
+                                                    <div className="flex justify-between text-[10px]">
+                                                        <span className="text-pink-400 font-bold uppercase">{slotData.heroClass}</span>
+                                                        <span className="text-yellow-400">LV {slotData.stats.lvl}</span>
+                                                    </div>
+                                                    <div className="flex justify-between text-[8px] text-slate-400">
+                                                        <span>DUNGEON L {slotData.stats.dungeonLevel}</span>
+                                                        <span className="text-yellow-500 font-bold">{slotData.stats.gold} G</span>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="text-center text-[9px] text-slate-600 font-bold italic uppercase my-3 py-1">
+                                                    --- {settingsRef.current.language === 'it' ? 'VUOTO' : 'EMPTY'} ---
+                                                </div>
+                                            )}
+
+                                            <div className="flex gap-1 mt-auto">
+                                                <button
+                                                    onClick={() => {
+                                                        const confirmSave = slotData ? confirm(settingsRef.current.language === 'it' ? `Vuoi sovrascrivere lo Slot ${slotNum}?` : `Overwrite Slot ${slotNum}?`) : true;
+                                                        if (confirmSave) {
+                                                            const saveData = {
+                                                                stats: stats.current,
+                                                                heroClass: heroClass,
+                                                                settings: {
+                                                                    ...settingsRef.current,
+                                                                    seed: activeSeed.current,
+                                                                    language: settingsRef.current.language,
+                                                                    audio: settingsRef.current.audio,
+                                                                    fps: settingsRef.current.fps,
+                                                                    showFps: settingsRef.current.showFps,
+                                                                    scanlines: settingsRef.current.scanlines,
+                                                                    controlMode: settingsRef.current.controlMode,
+                                                                    keys: settingsRef.current.keys
+                                                                },
+                                                                timestamp: Date.now()
+                                                            };
+                                                            localStorage.setItem(slotKey, JSON.stringify(saveData));
+                                                            setRenderTrigger(p => p + 1);
+                                                        }
+                                                    }}
+                                                    className="flex-1 py-1 px-1 bg-cyan-950/40 border border-cyan-800/50 hover:border-cyan-400 hover:bg-cyan-950/60 rounded text-[9px] font-bold text-cyan-400 transition-all text-center flex items-center justify-center gap-1"
+                                                >
+                                                    <Save className="w-2.5 h-2.5 animate-pulse" /> {settingsRef.current.language === 'it' ? 'SALVA' : 'SAVE'}
+                                                </button>
+
+                                                {slotData && (
+                                                    <>
+                                                        <button
+                                                            onClick={() => {
+                                                                if (confirm(settingsRef.current.language === 'it' ? 'Vuoi caricare questa partita? Perderai i progressi correnti non salvati!' : 'Load this game? Any unsaved progress will be lost!')) {
+                                                                    if (onLoadSlot) {
+                                                                        onLoadSlot(slotData);
+                                                                    } else {
+                                                                        localStorage.setItem('player_stats', JSON.stringify(slotData.stats));
+                                                                        localStorage.setItem('player_hero_class', slotData.heroClass);
+                                                                        localStorage.setItem('neonDungeonSettings', JSON.stringify(slotData.settings));
+                                                                        window.location.reload();
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className="flex-1 py-1 px-1 bg-pink-950/40 border border-pink-800/50 hover:border-pink-400 hover:bg-pink-950/60 rounded text-[9px] font-bold text-pink-400 transition-all text-center flex items-center justify-center"
+                                                        >
+                                                            {settingsRef.current.language === 'it' ? 'CARICA' : 'LOAD'}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                if (confirm(settingsRef.current.language === 'it' ? `Eliminare il salvataggio nello Slot ${slotNum}?` : `Delete save in Slot ${slotNum}?`)) {
+                                                                    localStorage.removeItem(slotKey);
+                                                                    setRenderTrigger(p => p + 1);
+                                                                }
+                                                            }}
+                                                            className="p-1 text-slate-500 hover:text-red-500 border border-transparent hover:border-red-950 rounded transition-all flex items-center justify-center animate-bounce"
+                                                        >
+                                                            <Trash2 className="w-3 h-3" />
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <button
+                                className="px-6 py-2 mt-4 text-slate-500 hover:text-white font-black italic uppercase tracking-widest transition-all text-xs"
+                                onClick={() => setShowOptions(false)}
+                            >
+                                {settingsRef.current.language === 'it' ? 'INDIETRO' : 'BACK'}
+                            </button>
+                        </div>
                     ) : (
                         <>
                             <h2 className="text-5xl font-black italic text-white mb-2 tracking-tighter drop-shadow-[0_0_15px_rgba(255,255,255,0.2)] select-none uppercase">PAUSED</h2>
@@ -9164,14 +10667,44 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
                                 </span>
                             </button>
                             <button
+                                className="px-6 py-4 text-slate-500 hover:text-pink-400 font-black italic tracking-widest rounded-xl transition-all uppercase text-sm border border-slate-800/50 hover:bg-slate-950/50 flex justify-between items-center px-4"
+                                onClick={() => {
+                                    const nextVal = !autosaveEnabled;
+                                    setAutosaveEnabled(nextVal);
+                                    localStorage.setItem('autosave_enabled', String(nextVal));
+                                }}
+                            >
+                                <span>{settingsRef.current.language === 'it' ? 'AUTOSALVATAGGIO' : 'AUTOSAVE'}</span>
+                                <span className={`px-2 py-0.5 rounded text-[10px] ml-2 ${autosaveEnabled ? 'bg-cyan-500/20 text-cyan-400' : 'bg-red-500/20 text-red-500'}`}>
+                                    {autosaveEnabled ? 'ON' : 'OFF'}
+                                </span>
+                            </button>
+                            <button
+                                className="px-6 py-4 text-slate-500 hover:text-cyan-450 font-black italic tracking-widest rounded-xl transition-all uppercase text-sm border border-slate-800/50 hover:bg-slate-950/50 flex justify-between items-center px-4"
+                                onClick={() => setShowOptions('slots')}
+                            >
+                                <span>{settingsRef.current.language === 'it' ? 'SALVA GIOCO (SLOT)' : 'SAVE GAME (SLOT)'}</span>
+                                <Save className="w-3.5 h-3.5 text-cyan-400" />
+                            </button>
+                            <button
                                 className="px-6 py-4 text-slate-500 hover:text-white font-black italic tracking-widest rounded-xl transition-all uppercase text-sm border border-slate-800/50 hover:bg-slate-950/50"
                                 onClick={() => setShowOptions(true)}
                             >
                                 {settingsRef.current.language === 'it' ? 'Parametri Sistema' : 'System Parameters'}
                             </button>
                             <button
+                                className="px-6 py-4 text-slate-500 hover:text-cyan-400 font-black italic tracking-widest rounded-xl transition-all uppercase text-sm border border-slate-800/50 hover:bg-slate-950/50"
+                                onClick={() => setShowTrophies(true)}
+                            >
+                                {settingsRef.current.language === 'it' ? 'Trofei' : 'Trophies'}
+                            </button>
+                            <button
                                 className="px-6 py-3 text-red-900 hover:text-red-500 font-black italic tracking-widest transition-all uppercase text-[10px]"
-                                onClick={() => window.location.reload()}
+                                onClick={() => {
+                                    localStorage.removeItem('player_stats');
+                                    localStorage.removeItem('game_interrupted');
+                                    window.location.reload();
+                                }}
                             >
                                 {settingsRef.current.language === 'it' ? 'Termina Sessione' : 'Abort Session'}
                             </button>
@@ -9473,6 +11006,113 @@ export default function GameCanvas({ settings, heroClass, onExit }: { settings: 
         kills={hudStats.bestiaryKills || {}} 
         language={settings.language || 'it'}
       />
+      <TrophiesUI 
+        isOpen={showTrophies} 
+        onClose={() => setShowTrophies(false)} 
+        stats={hudStats} 
+        unlockedTrophies={stats.current.unlockedTrophies || []} 
+        language={settings.language || 'it'}
+      />
+
+      {/* Dynamic Boss Health Bar HUD */}
+      <AnimatePresence>
+          {activeBoss && (
+              <motion.div
+                  initial={{ opacity: 0, y: -45, x: '-50%', scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, x: '-50%', scale: 1 }}
+                  exit={{ opacity: 0, y: -30, x: '-50%', scale: 0.95 }}
+                  transition={{ type: 'spring', stiffness: 200, damping: 20 }}
+                  className="fixed top-[115px] lg:top-[80px] left-1/2 z-[1400] w-[90%] max-w-xl bg-slate-950/95 border border-red-500/50 rounded-xl p-4 shadow-[0_0_30px_rgba(239,68,68,0.35)] backdrop-blur-md flex flex-col gap-2"
+              >
+                  {/* Title & Warning Info */}
+                  <div className="flex justify-between items-center px-1">
+                      <div className="flex items-center gap-2">
+                          <span className="text-red-500 text-xs sm:text-sm animate-ping">⚠️</span>
+                          <span className="text-red-500 font-extrabold tracking-[0.2em] text-xs sm:text-sm drop-shadow-[0_0_8px_rgba(239,68,68,0.6)] uppercase">
+                              {getBossName(activeBoss.type, settings.language || 'it')}
+                          </span>
+                      </div>
+                      <span className="font-mono text-[9px] sm:text-xs font-black text-rose-500/80 tracking-widest uppercase animate-pulse">
+                          {settings.language === 'it' ? 'BOSS ATTIVO' : 'BOSS ACTIVE'}
+                      </span>
+                  </div>
+
+                  {/* Health Bar Track with Ghost Catch-up Effect */}
+                  <div className="relative w-full h-3 sm:h-4 bg-slate-900/90 rounded-full border border-red-500/20 overflow-hidden shadow-inner">
+                      {/* Orange/Yellow catch-up bar for delayed damage effect */}
+                      <div 
+                          className="absolute inset-y-0 left-0 bg-amber-500/40 rounded-full transition-all duration-700 ease-out"
+                          style={{ width: `${Math.max(0, Math.min(100, (activeBoss.hp / activeBoss.maxHp) * 100))}%` }}
+                      />
+                      {/* Active Red Health Fill with Neon Glow */}
+                      <div 
+                          className="absolute inset-y-0 left-0 bg-gradient-to-r from-red-600 via-rose-500 to-red-500 rounded-full transition-all duration-150 ease-out shadow-[0_0_15px_rgba(239,68,68,0.8)]"
+                          style={{ width: `${Math.max(0, Math.min(100, (activeBoss.hp / activeBoss.maxHp) * 100))}%` }}
+                      >
+                          {/* Pulsative shiny gleam */}
+                          <div className="absolute inset-x-0 top-0 h-[35%] bg-white/20 rounded-t-full" />
+                      </div>
+                  </div>
+
+                  {/* HP Value Status Indicators */}
+                  <div className="flex justify-between items-center px-1 font-mono text-[9px] sm:text-[10px] font-bold text-slate-400">
+                      <span className="text-red-400/90 tracking-wider">
+                          {(settings.language === 'it' ? 'VITA: ' : 'HP: ') + Math.max(0, Math.round(activeBoss.hp))} / {activeBoss.maxHp}
+                      </span>
+                      <span className="text-red-400 font-extrabold tracking-widest">
+                          {Math.max(0, Math.round((activeBoss.hp / activeBoss.maxHp) * 100))}%
+                      </span>
+                  </div>
+              </motion.div>
+          )}
+      </AnimatePresence>
+
+      {settingsRef.current.scanlines && (
+          <>
+            <div className="fixed inset-0 pointer-events-none z-[1000] scanline-overlay opacity-60"></div>
+            <div className="fixed inset-0 pointer-events-none z-[1001] scanline-animation opacity-30"></div>
+          </>
+      )}
+
+      {/* Trophy Progress Overlay */}
+      <div className="fixed top-24 right-4 z-[1500] flex flex-col gap-2 pointer-events-none">
+          <AnimatePresence>
+              {Object.keys(activeTrackers).map(id => {
+                  const trophy = TROPHIES.find(t => t.id === id);
+                  if (!trophy) return null;
+                  const current = stats.current[trophy.statKey] || 0;
+                  const target = trophy.targetValue;
+                  const isUnlocked = stats.current.unlockedTrophies.includes(id);
+                  if (isUnlocked) return null;
+
+                  return (
+                      <motion.div 
+                          key={id}
+                          initial={{ opacity: 0, x: 50, scale: 0.9 }}
+                          animate={{ opacity: 1, x: 0, scale: 1 }}
+                          exit={{ opacity: 0, x: 20, scale: 0.9 }}
+                          className="bg-slate-900/80 border border-cyan-500/30 rounded-lg p-2 flex items-center gap-3 backdrop-blur-sm shadow-xl min-w-[140px]"
+                      >
+                          <div className="text-xl shrink-0">{trophy.icon}</div>
+                          <div className="flex flex-col min-w-0 flex-1">
+                              <div className="text-[10px] font-black text-cyan-400 uppercase tracking-tighter truncate">
+                                  {trophy.title[settings.language || 'it'] as any}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                  <div className="h-1 flex-1 bg-slate-800 rounded-full overflow-hidden">
+                                      <div 
+                                          className="h-full bg-cyan-500"
+                                          style={{ width: `${Math.min(100, (current/target)*100)}%` }}
+                                      />
+                                  </div>
+                                  <span className="text-[9px] font-bold text-slate-400 tabular-nums shrink-0">{current}/{target}</span>
+                              </div>
+                          </div>
+                      </motion.div>
+                  );
+              })}
+          </AnimatePresence>
+      </div>
     </div>
   );
 }

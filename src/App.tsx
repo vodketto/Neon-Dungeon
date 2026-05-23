@@ -14,6 +14,7 @@ export default function App() {
   const [heroClass, setHeroClass] = useState<HeroClass>('warrior');
 
   const handleExit = () => {
+    localStorage.removeItem('player_stats');
     setIsStarted(false);
     setSettings(null);
   };
@@ -29,11 +30,33 @@ export default function App() {
                     exit={{ opacity: 0, scale: 1.1 }}
                     transition={{ duration: 0.5 }}
                 >
-                    <StartScreen onStart={(s, h) => {
-                        setSettings(s);
-                        setHeroClass(h);
-                        setIsStarted(true);
-                    }} />
+                    <StartScreen 
+                        onStart={(s, h) => {
+                            localStorage.setItem('player_hero_class', h);
+                            localStorage.removeItem('player_stats');
+                            localStorage.removeItem('game_interrupted');
+                            setSettings(s);
+                            setHeroClass(h);
+                            setIsStarted(true);
+                        }}
+                        onContinue={() => {
+                            const savedSettings = localStorage.getItem('neonDungeonSettings');
+                            if (savedSettings) setSettings(JSON.parse(savedSettings));
+                            const savedHero = localStorage.getItem('player_hero_class') as HeroClass || 'warrior';
+                            setHeroClass(savedHero);
+                            setIsStarted(true);
+                        }}
+                        onLoadSlot={(slotData) => {
+                            localStorage.setItem('player_stats', JSON.stringify(slotData.stats));
+                            localStorage.setItem('player_hero_class', slotData.heroClass);
+                            localStorage.setItem('neonDungeonSettings', JSON.stringify(slotData.settings));
+                            // Also mark load as a clean interrupted game state to enable continuation
+                            localStorage.setItem('game_interrupted', 'true');
+                            setHeroClass(slotData.heroClass);
+                            setSettings(slotData.settings);
+                            setIsStarted(true);
+                        }}
+                    />
                 </motion.div>
             ) : (
                 <motion.div
@@ -47,6 +70,13 @@ export default function App() {
                         settings={settings} 
                         heroClass={heroClass} 
                         onExit={handleExit}
+                        onLoadSlot={(slotData) => {
+                            localStorage.setItem('player_stats', JSON.stringify(slotData.stats));
+                            localStorage.setItem('player_hero_class', slotData.heroClass);
+                            localStorage.setItem('neonDungeonSettings', JSON.stringify(slotData.settings));
+                            localStorage.setItem('game_interrupted', 'true');
+                            window.location.reload();
+                        }}
                     />
                 </motion.div>
             )}

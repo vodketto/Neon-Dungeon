@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Skull, Info, Shield, Zap, Target } from 'lucide-react';
-import { ENEMY_NAMES, ENEMY_PIXEL_ARTS } from '../game/enemies';
+import { X, Skull, Info, Shield, Zap, Target, Star, Award } from 'lucide-react';
+import { ENEMY_NAMES, ENEMY_PIXEL_ARTS, getEnemyDefense } from '../game/enemies';
 import { BESTIARY_DATA } from '../game/bestiary';
 
 interface BestiaryUIProps {
@@ -66,6 +66,60 @@ export default function BestiaryUI({ kills, isOpen, onClose, language = 'it' }: 
         }
     };
 
+    const getRarityCardStyle = (type: string, isDiscovered: boolean, isSelected: boolean, hasMastery: boolean = false) => {
+        if (!isDiscovered) {
+            return 'bg-slate-900/45 opacity-30 grayscale border-slate-800/60';
+        }
+        if (hasMastery) {
+            return isSelected 
+                ? 'bg-amber-950/20 border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.5),_inset_0_0_12px_rgba(245,158,11,0.1)] opacity-100 animate-pulse' 
+                : 'bg-slate-950/40 border-amber-600/30 shadow-[0_0_8px_rgba(245,158,11,0.1),_inset_0_0_10px_rgba(245,158,11,0.02)] opacity-70 hover:opacity-100';
+        }
+        const rarity = BESTIARY_DATA[type]?.rarity || 'common';
+        switch (rarity) {
+            case 'legendary':
+                return isSelected 
+                    ? 'bg-amber-500/15 border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.6)]' 
+                    : 'bg-slate-800/50 border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.2)] hover:border-amber-500/65';
+            case 'epic':
+                return isSelected 
+                    ? 'bg-purple-500/15 border-purple-500 shadow-[0_0_15px_rgba(168,85,247,0.6)]' 
+                    : 'bg-slate-800/50 border-purple-500/40 shadow-[0_0_8px_rgba(168,85,247,0.2)] hover:border-purple-500/65';
+            case 'rare':
+                return isSelected 
+                    ? 'bg-blue-500/15 border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.6)]' 
+                    : 'bg-slate-800/50 border-blue-500/40 shadow-[0_0_8px_rgba(59,130,246,0.2)] hover:border-blue-500/65';
+            case 'uncommon':
+                return isSelected 
+                    ? 'bg-green-500/15 border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.6)]' 
+                    : 'bg-slate-800/50 border-green-500/40 shadow-[0_0_8px_rgba(34,197,94,0.2)] hover:border-green-500/65';
+            default: // common
+                return isSelected 
+                    ? 'bg-cyan-500/15 border-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.6)]' 
+                    : 'bg-slate-800/50 border-slate-700/50 hover:border-slate-500';
+        }
+    };
+
+    const getRarityHoverStyle = (type: string, isDiscovered: boolean, hasMastery: boolean = false) => {
+        if (!isDiscovered) return { scale: 1.02 };
+        if (hasMastery) {
+            return { scale: 1.08, borderColor: "rgba(245, 158, 11, 0.7)", boxShadow: "0px 0px 14px rgba(245, 158, 11, 0.45)" };
+        }
+        const rarity = BESTIARY_DATA[type]?.rarity || 'common';
+        switch (rarity) {
+            case 'legendary':
+                return { scale: 1.08, borderColor: "rgba(245, 158, 11, 0.8)", boxShadow: "0px 0px 16px rgba(245, 158, 11, 0.5)" };
+            case 'epic':
+                return { scale: 1.08, borderColor: "rgba(168, 85, 247, 0.8)", boxShadow: "0px 0px 16px rgba(168, 85, 247, 0.5)" };
+            case 'rare':
+                return { scale: 1.08, borderColor: "rgba(59, 130, 246, 0.8)", boxShadow: "0px 0px 16px rgba(59, 130, 246, 0.5)" };
+            case 'uncommon':
+                return { scale: 1.08, borderColor: "rgba(34, 197, 94, 0.8)", boxShadow: "0px 0px 16px rgba(34, 197, 94, 0.5)" };
+            default:
+                return { scale: 1.08, borderColor: "rgba(6, 182, 212, 0.8)", boxShadow: "0px 0px 16px rgba(6, 182, 212, 0.5)" };
+        }
+    };
+
     return (
         <AnimatePresence>
             {isOpen && (
@@ -114,25 +168,103 @@ export default function BestiaryUI({ kills, isOpen, onClose, language = 'it' }: 
                                     const count = kills[type] || 0;
                                     const isDiscovered = count > 0;
                                     const isSelected = selectedEnemy === type;
+                                    const hasMastery = count >= 50;
 
+                                    const delay = (type.charCodeAt(0) % 7) * 0.4;
                                     return (
                                         <motion.button
                                             key={type}
-                                            whileHover={{ scale: 1.05 }}
+                                            id={`bestiary-item-card-${type}`}
+                                            whileHover={getRarityHoverStyle(type, isDiscovered, hasMastery)}
                                             whileTap={{ scale: 0.95 }}
+                                            animate={isDiscovered ? {
+                                                scale: [1, 1.02, 1],
+                                            } : undefined}
+                                            transition={isDiscovered ? {
+                                                scale: {
+                                                    duration: 3 + (type.charCodeAt(0) % 3),
+                                                    repeat: Infinity,
+                                                    repeatType: "reverse",
+                                                    ease: "easeInOut",
+                                                    delay: delay
+                                                }
+                                            } : undefined}
                                             onClick={() => setSelectedEnemy(type)}
                                             className={`
                                                 relative aspect-square rounded-xl border flex flex-col items-center justify-center gap-2 transition-all p-2
-                                                ${!isDiscovered ? 'opacity-30 grayscale' : 'opacity-100'}
-                                                ${isSelected 
-                                                    ? 'bg-cyan-500/10 border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.2)]' 
-                                                    : 'bg-slate-800/50 border-slate-700/50 hover:border-slate-500'}
+                                                ${getRarityCardStyle(type, isDiscovered, isSelected, hasMastery)}
                                             `}
                                         >
-                                            <EnemyAvatar type={type} size={48} />
-                                            <div className="text-[10px] font-black text-slate-400 uppercase tracking-tighter truncate w-full text-center">
+                                            {hasMastery ? (
+                                                <div id={`bestiary-elite-badge-${type}`} className="relative flex items-center justify-center w-12 h-12">
+                                                    {/* Outer spin ring */}
+                                                    <div className="absolute inset-0 bg-amber-500/10 rounded-full border border-dashed border-amber-500/30 animate-spin" />
+                                                    {/* Central solid circle */}
+                                                    <div className="relative flex items-center justify-center w-10 h-10 rounded-full bg-gradient-to-tr from-amber-600 to-yellow-400 border border-yellow-200/30 shadow-[0_0_12px_rgba(245,158,11,0.5)]">
+                                                        <Award className="w-5.5 h-5.5 text-slate-950" />
+                                                    </div>
+                                                    {/* Elite Text Overlay */}
+                                                    <div className="absolute bottom-0 bg-slate-950 border border-amber-500/50 text-amber-400 font-mono text-[7px] font-black px-1.5 py-0.25 rounded tracking-widest uppercase shadow-[0_2px_4px_rgba(0,0,0,0.8)] z-10 scale-[0.85]">
+                                                        ELITE
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <EnemyAvatar type={type} size={48} />
+                                            )}
+
+                                            {hasMastery && (
+                                                <div id={`bestiary-particles-${type}`} className="absolute inset-0 overflow-hidden rounded-xl pointer-events-none">
+                                                    {[...Array(5)].map((_, i) => (
+                                                        <motion.div
+                                                            key={i}
+                                                            id={`disintegrate-particle-${type}-${i}`}
+                                                            className="absolute bg-amber-500 rounded-sm w-1 h-0.5 shadow-[0_0_6px_rgba(245,158,11,0.8)]"
+                                                            initial={{ 
+                                                                x: `${15 + (i * 18) + (type.charCodeAt(i % type.length) % 10)}%`, 
+                                                                y: "85%", 
+                                                                opacity: 0.8, 
+                                                                scale: 1 
+                                                            }}
+                                                            animate={{ 
+                                                                y: "25%", 
+                                                                opacity: [0, 0.9, 0], 
+                                                                scale: [0.8, 1.3, 0.4] 
+                                                            }}
+                                                            transition={{
+                                                                duration: 1.8 + (i * 0.4),
+                                                                repeat: Infinity,
+                                                                ease: "easeOut",
+                                                                delay: i * 0.3
+                                                            }}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            {isDiscovered && !hasMastery && count >= 25 && (
+                                                <div className="absolute top-1 left-1 bg-yellow-500 text-slate-900 rounded-full p-0.5 shadow-[0_0_8px_rgba(234,179,8,0.6)]">
+                                                    <Star className="w-2.5 h-2.5 fill-current" />
+                                                </div>
+                                            )}
+                                            <div className="text-[10px] font-black text-slate-400 uppercase tracking-tighter truncate w-full text-center mt-auto">
                                                 {isDiscovered ? (ENEMY_NAMES[type]?.[language] || type) : '???'}
                                             </div>
+
+                                            {isDiscovered && !hasMastery && (
+                                                <div className="w-full mt-1 px-1">
+                                                    <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+                                                        <motion.div 
+                                                            initial={{ width: 0 }}
+                                                            animate={{ width: `${Math.min(100, (count / 50) * 100)}%` }}
+                                                            className="h-full bg-cyan-500"
+                                                        />
+                                                    </div>
+                                                    <div className="text-[7px] font-black text-slate-500 uppercase tracking-widest text-center mt-0.5">
+                                                        {count}/50 {language === 'it' ? 'KILL' : 'KILLS'}
+                                                    </div>
+                                                </div>
+                                            )}
+
                                             {count > 0 && (
                                                 <div className="absolute top-1 right-1 bg-red-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full shadow-lg">
                                                     {count}
@@ -160,27 +292,66 @@ export default function BestiaryUI({ kills, isOpen, onClose, language = 'it' }: 
                                                 </h3>
                                             </div>
                                         </div>
-
-                                        <div className="flex flex-col gap-4">
-                                            <div className="space-y-2">
-                                                <div className="flex items-center gap-2 text-cyan-400">
-                                                    <Info className="w-4 h-4" />
-                                                    <span className="text-xs font-black uppercase tracking-widest">{language === 'it' ? 'DESCRIZIONE' : 'DESCRIPTION'}</span>
+                                        {selectedEnemy && (
+                                            <div className="flex flex-col gap-4">
+                                                <div className="space-y-2">
+                                                    <div className="flex items-center gap-2 text-cyan-400">
+                                                        <Info className="w-4 h-4" />
+                                                        <span className="text-xs font-black uppercase tracking-widest">{language === 'it' ? 'DESCRIZIONE' : 'DESCRIPTION'}</span>
+                                                    </div>
+                                                    <p className="text-sm text-slate-300 leading-relaxed font-medium italic italic">
+                                                        {kills[selectedEnemy] > 0 
+                                                            ? (BESTIARY_DATA[selectedEnemy].description[language]) 
+                                                            : (language === 'it' ? 'Sconfiggi questo nemico per sbloccare le informazioni.' : 'Defeat this enemy to unlock information.')}
+                                                    </p>
                                                 </div>
-                                                <p className="text-sm text-slate-300 leading-relaxed font-medium italic italic">
-                                                    {kills[selectedEnemy] > 0 
-                                                        ? (BESTIARY_DATA[selectedEnemy].description[language]) 
-                                                        : (language === 'it' ? 'Sconfiggi questo nemico per sbloccare le informazioni.' : 'Defeat this enemy to unlock information.')}
-                                                </p>
-                                            </div>
 
-                                            <div className="flex flex-col gap-2 pt-4 border-t border-slate-800">
-                                                <div className="flex justify-between items-center text-xs">
-                                                    <span className="text-slate-500 font-bold uppercase tracking-widest">{language === 'it' ? 'VITTORIE' : 'VANQUISHED'}</span>
-                                                    <span className="text-red-500 font-black text-lg italic">{kills[selectedEnemy] || 0}</span>
+                                                <div className="flex flex-col gap-2 pt-4 border-t border-slate-800">
+                                                    {kills[selectedEnemy] > 0 && (() => {
+                                                        const def = getEnemyDefense(selectedEnemy);
+                                                        const getResLabel = (val: number) => val >= 30 ? (language === 'it' ? 'RESISTENTE' : 'RESISTANT') : (val > 0 ? (language === 'it' ? 'NORMALE' : 'NORMAL') : (language === 'it' ? 'DEBOLE' : 'WEAK'));
+                                                    
+                                                        return (
+                                                            <>
+                                                                <div className="flex justify-between items-center text-xs">
+                                                                    <span className="text-slate-500 font-bold uppercase tracking-widest">{language === 'it' ? 'FISICA' : 'PHYSICAL'}</span>
+                                                                    <span className={`font-black italic ${def.physicalDefense >= 30 ? 'text-red-500' : 'text-green-500'}`}>{getResLabel(def.physicalDefense)}</span>
+                                                                </div>
+                                                                <div className="flex justify-between items-center text-xs">
+                                                                    <span className="text-slate-500 font-bold uppercase tracking-widest">{language === 'it' ? 'MAGICA' : 'MAGICAL'}</span>
+                                                                    <span className={`font-black italic ${def.magicalDefense >= 30 ? 'text-red-500' : 'text-green-500'}`}>{getResLabel(def.magicalDefense)}</span>
+                                                                </div>
+                                                            </>
+                                                        );
+                                                    })()}
+                                                    
+                                                    <div className="flex justify-between items-center text-xs mt-2">
+                                                        <span className="text-slate-500 font-bold uppercase tracking-widest">{language === 'it' ? 'VITTORIE' : 'VANQUISHED'}</span>
+                                                        <span className="text-red-500 font-black text-lg italic">{kills[selectedEnemy] || 0}</span>
+                                                    </div>
+                                                    
+                                                    {kills[selectedEnemy] >= 50 && (
+                                                        <motion.div 
+                                                            initial={{ opacity: 0, y: 10 }}
+                                                            animate={{ opacity: 1, y: 0 }}
+                                                            className="mt-2 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl flex items-center gap-3"
+                                                        >
+                                                            <div className="p-2 bg-yellow-500/20 rounded-lg">
+                                                                <Award className="w-5 h-5 text-yellow-500" />
+                                                            </div>
+                                                            <div>
+                                                                <div className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">
+                                                                    {language === 'it' ? 'MAESTRIA SBLOCCATA' : 'MASTERY UNLOCKED'}
+                                                                </div>
+                                                                <div className="text-[11px] text-yellow-200/70 font-medium italic">
+                                                                    {language === 'it' ? '+1% Danni contro questa specie' : '+1% Damage against this species'}
+                                                                </div>
+                                                            </div>
+                                                        </motion.div>
+                                                    )}
                                                 </div>
                                             </div>
-                                        </div>
+                                        )}
                                     </>
                                 ) : (
                                     <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 text-slate-500 p-8">

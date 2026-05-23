@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { globalAudio } from '../game/audio';
 import MenuBackground from './MenuBackground';
 import { motion, AnimatePresence } from 'motion/react';
-import { Settings, Play, Shield, Sword, Wand2, ChevronLeft, Volume2, VolumeX, Keyboard, Gamepad2, Monitor } from 'lucide-react';
+import { Settings, Play, Shield, Sword, Wand2, ChevronLeft, Volume2, VolumeX, Keyboard, Gamepad2, Monitor, Save, Trash2 } from 'lucide-react';
 
 export type HeroClass = 'warrior' | 'mage' | 'paladin';
 export interface GameSettings {
@@ -16,6 +16,7 @@ export interface GameSettings {
     startLevel?: number;
     difficulty: number;
     showFps: boolean;
+    scanlines: boolean;
     keys: {
         up: string;
         down: string;
@@ -30,27 +31,40 @@ const CyberButton = ({ children, onClick, active = false, className = "", varian
     const colors: any = {
         cyan: "from-cyan-500 to-blue-600 border-cyan-400 group-hover:shadow-[0_0_15px_rgba(34,211,238,0.5)]",
         pink: "from-pink-500 to-purple-600 border-pink-400 group-hover:shadow-[0_0_15px_rgba(236,72,153,0.5)]",
-        gray: "from-slate-700 to-slate-900 border-slate-600"
+        gray: "from-slate-700 to-slate-950 border-slate-600"
     };
 
     return (
         <button 
+            type="button"
             onClick={onClick}
-            className={`group relative px-6 py-3 transition-all duration-200 active:scale-95 ${className}`}
+            className={`group relative px-6 py-3 select-none ${className}`}
         >
-            <div className={`absolute inset-0 bg-gradient-to-br opacity-20 group-hover:opacity-40 transition-opacity rounded-sm ${colors[variant]}`} />
-            <div className={`relative z-10 font-mono tracking-[0.2em] font-black italic flex items-center justify-center gap-3 ${active ? 'text-white' : 'text-slate-400 group-hover:text-white'}`}>
+            {/* Decorative and backgrounds that scale visual-only when clicked */}
+            <div className="absolute inset-0 pointer-events-none group-active:scale-95 transition-transform duration-100 ease-out">
+                <div className={`absolute inset-0 bg-gradient-to-br opacity-20 group-hover:opacity-45 transition-all rounded-sm ${colors[variant]}`} />
+                {/* Corner Accents */}
+                <div className={`absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 ${active ? 'border-white' : 'border-slate-700 group-hover:border-white'}`} />
+                <div className={`absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 ${active ? 'border-white' : 'border-slate-700 group-hover:border-white'}`} />
+            </div>
+
+            {/* Content text/icons that scale visual-only and let events click through */}
+            <div className={`relative z-10 font-mono tracking-[0.2em] font-black italic flex items-center justify-center gap-3 pointer-events-none group-active:scale-95 transition-transform duration-100 ease-out ${active ? 'text-white' : 'text-slate-400 group-hover:text-white'}`}>
                 {children}
             </div>
-            {/* Corner Accents */}
-            <div className={`absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 ${active ? 'border-white' : 'border-slate-700 group-hover:border-white'}`} />
-            <div className={`absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 ${active ? 'border-white' : 'border-slate-700 group-hover:border-white'}`} />
         </button>
     );
 }
 
-export default function StartScreen({ onStart }: { onStart: (settings: GameSettings, hero: HeroClass) => void }) {
-  const [view, setView] = useState<'main' | 'options' | 'controls' | 'heroSelection' | 'customDungeon'>('main');
+export default function StartScreen({ onStart, onContinue, onLoadSlot }: { onStart: (settings: GameSettings, hero: HeroClass) => void, onContinue?: () => void, onLoadSlot?: (saveData: any) => void }) {
+  const [view, setView] = useState<'main' | 'options' | 'controls' | 'heroSelection' | 'customDungeon' | 'slots'>('main');
+  const [hasSavedGame, setHasSavedGame] = useState(false);
+  const [isInterrupted, setIsInterrupted] = useState(false);
+
+  useEffect(() => {
+    setHasSavedGame(!!localStorage.getItem('player_stats'));
+    setIsInterrupted(localStorage.getItem('game_interrupted') === 'true');
+  }, []);
   const [customSeed, setCustomSeed] = useState('');
   const [customLevel, setCustomLevel] = useState(1);
   const [suggestedSeed, setSuggestedSeed] = useState(() => (Math.random().toString(36).substring(2, 6) + "-" + Math.random().toString(36).substring(2, 6)).toUpperCase());
@@ -65,6 +79,7 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
           controlMode: 'keyboard',
           difficulty: 3,
           showFps: false,
+          scanlines: true,
           keys: {
               up: 'w',
               down: 's',
@@ -81,6 +96,7 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
               ...defaults,
               ...parsed,
               showFps: parsed.showFps !== undefined ? !!parsed.showFps : defaults.showFps,
+              scanlines: parsed.scanlines !== undefined ? !!parsed.scanlines : defaults.scanlines,
               // Ensure volumes are finite numbers
               musicVolume: typeof parsed.musicVolume === 'number' && Number.isFinite(parsed.musicVolume) ? parsed.musicVolume : defaults.musicVolume,
               sfxVolume: typeof parsed.sfxVolume === 'number' && Number.isFinite(parsed.sfxVolume) ? parsed.sfxVolume : defaults.sfxVolume,
@@ -460,6 +476,21 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
                              </CyberButton>
                           </div>
                       </div>
+
+                      {/* SCANLINES TOGGLE */}
+                      <div className="flex flex-col gap-3">
+                          <div className="text-[10px] text-slate-500 uppercase tracking-widest font-black italic">
+                              {settings.language === 'it' ? 'Scanline Overlay' : 'Scanline Overlay'}
+                          </div>
+                          <div className="flex gap-2">
+                             <CyberButton active={settings.scanlines} onClick={() => setSettings({...settings, scanlines: true})} className="flex-1 py-4 sm:py-3">
+                                {settings.language === 'it' ? 'ATTIVO' : 'ENABLED'}
+                             </CyberButton>
+                             <CyberButton active={!settings.scanlines} onClick={() => setSettings({...settings, scanlines: false})} className="flex-1 py-4 sm:py-3">
+                                {settings.language === 'it' ? 'SPENTO' : 'DISABLED'}
+                             </CyberButton>
+                          </div>
+                      </div>
                   </div>
 
                   <button
@@ -513,13 +544,15 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
                                 <label className="text-[9px] sm:text-[10px] text-slate-500 uppercase font-black tracking-widest">Infiltration Depth</label>
                                 <div className="flex items-center gap-3">
                                     <button 
+                                        type="button"
                                         onClick={() => setCustomLevel(Math.max(1, customLevel - 1))}
-                                        className="w-8 h-8 flex items-center justify-center bg-slate-800 text-white rounded-lg hover:bg-cyan-600 transition-colors font-black active:scale-90"
+                                        className="w-11 h-11 flex items-center justify-center bg-slate-800 text-white rounded-lg hover:bg-cyan-600 active:bg-cyan-700 transition-colors font-black text-lg select-none"
                                     >-</button>
                                     <span className="text-pink-500 font-black italic w-14 sm:w-16 text-center text-sm">LV {customLevel}</span>
                                     <button 
+                                        type="button"
                                         onClick={() => setCustomLevel(Math.min(1000, customLevel + 1))}
-                                        className="w-8 h-8 flex items-center justify-center bg-slate-800 text-white rounded-lg hover:bg-cyan-600 transition-colors font-black active:scale-90"
+                                        className="w-11 h-11 flex items-center justify-center bg-slate-800 text-white rounded-lg hover:bg-cyan-600 active:bg-cyan-700 transition-colors font-black text-lg select-none"
                                     >+</button>
                                 </div>
                             </div>
@@ -536,10 +569,11 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
 
                       {customSeed.trim().length > 0 ? (
                         <motion.button 
+                            type="button"
                             initial={{ scale: 0.9, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
                             onClick={() => setView('heroSelection')}
-                            className="w-full py-4 bg-gradient-to-r from-pink-600 to-purple-700 text-white font-black italic tracking-[0.25em] rounded-xl shadow-[0_0_30px_rgba(236,72,153,0.5)] border border-pink-400 animate-pulse active:scale-95 transition-all text-sm"
+                            className="w-full py-4 bg-gradient-to-r from-pink-600 to-purple-700 text-white font-black italic tracking-[0.25em] rounded-xl shadow-[0_0_30px_rgba(236,72,153,0.5)] border border-pink-400 animate-pulse active:brightness-110 active:opacity-95 transition-all text-sm select-none"
                         >
                             {settings.language === 'it' ? 'INIZIA MISSIONE' : 'START MISSION'}
                         </motion.button>
@@ -573,6 +607,127 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
       );
   }
 
+  if (view === 'slots') {
+      return (
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 font-mono p-4">
+              <MenuBackground />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="relative z-10 flex flex-col items-center w-full max-w-2xl p-6 sm:p-8 bg-slate-900 border border-cyan-500/30 rounded-2xl"
+              >
+                  <h2 className="text-2xl sm:text-3xl font-black italic mb-6 text-white uppercase tracking-tighter text-center flex items-center justify-center gap-3">
+                      <Save className="w-6 h-6 text-cyan-400" />
+                      {settings.language === 'it' ? 'Carica Salvataggio' : 'Load Save Game'}
+                  </h2>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 w-full max-h-[350px] overflow-y-auto pr-1">
+                      {Array.from({ length: 9 }, (_, i) => {
+                          const slotNum = i + 1;
+                          const slotKey = `neon_dungeon_slot_${slotNum}`;
+                          const raw = localStorage.getItem(slotKey);
+                          let slotData = null;
+                          if (raw) {
+                              try { slotData = JSON.parse(raw); } catch(e){}
+                          }
+
+                          return (
+                              <div 
+                                  key={slotNum} 
+                                  className={`p-3 rounded-xl border text-left flex flex-col justify-between transition-all duration-200 ${
+                                      slotData 
+                                          ? 'bg-slate-950/80 border-cyan-500/30 hover:border-cyan-500/60' 
+                                          : 'bg-slate-950/40 border-slate-800/80 hover:border-slate-700'
+                                  }`}
+                              >
+                                  <div className="flex justify-between items-center mb-1">
+                                      <span className="text-[10px] uppercase font-black tracking-widest text-cyan-400">
+                                          SLOT {slotNum}
+                                      </span>
+                                      {slotData && (
+                                          <span className="text-[8px] text-slate-500 font-bold truncate max-w-[125px]">
+                                              {new Date(slotData.timestamp).toLocaleDateString(settings.language === 'it' ? 'it-IT' : 'en-US')}
+                                          </span>
+                                      )}
+                                  </div>
+
+                                  {slotData ? (
+                                      <div className="flex flex-col gap-1 text-[9px] text-slate-300 font-mono mb-3 bg-slate-900/60 p-2 rounded border border-slate-850">
+                                          <div className="flex justify-between text-[11px]">
+                                              <span className="text-pink-400 font-bold uppercase">{slotData.heroClass}</span>
+                                              <span className="text-yellow-400">LV {slotData.stats.lvl}</span>
+                                          </div>
+                                          <div className="flex justify-between text-[8px] text-slate-400">
+                                              <span>DUNGEON L {slotData.stats.dungeonLevel}</span>
+                                              <span className="text-yellow-500 font-bold">{slotData.stats.gold} G</span>
+                                          </div>
+                                          <div className="text-[8px] text-cyan-400 truncate mt-1">
+                                              ⚔️ {slotData.stats.physicalWeapon || (settings.language === 'it' ? 'Spada Base' : 'Base Sword')}
+                                          </div>
+                                      </div>
+                                  ) : (
+                                      <div className="text-center text-[10px] text-slate-600 font-bold italic uppercase my-6 py-2">
+                                          --- {settings.language === 'it' ? 'VUOTO' : 'EMPTY'} ---
+                                      </div>
+                                  )}
+
+                                  <div className="flex gap-1.5 mt-auto">
+                                      {slotData ? (
+                                          <>
+                                              <button
+                                                  onClick={() => {
+                                                      if (onLoadSlot) {
+                                                          onLoadSlot(slotData);
+                                                      } else {
+                                                          localStorage.setItem('player_stats', JSON.stringify(slotData.stats));
+                                                          localStorage.setItem('player_hero_class', slotData.heroClass);
+                                                          localStorage.setItem('neonDungeonSettings', JSON.stringify(slotData.settings));
+                                                          window.location.reload();
+                                                      }
+                                                  }}
+                                                  className="flex-1 py-1.5 px-2 bg-pink-950/40 hover:bg-pink-900/20 border border-pink-700/50 hover:border-pink-400 rounded text-[10px] font-bold text-pink-400 transition-all text-center flex items-center justify-center cursor-pointer"
+                                              >
+                                                  {settings.language === 'it' ? 'CARICA' : 'LOAD'}
+                                              </button>
+                                              <button
+                                                  onClick={() => {
+                                                      if (confirm(settings.language === 'it' ? `Eliminare il salvataggio nello Slot ${slotNum}?` : `Delete save in Slot ${slotNum}?`)) {
+                                                          localStorage.removeItem(slotKey);
+                                                          // force re-render by briefly toggling state
+                                                          setView('main');
+                                                          setTimeout(() => setView('slots'), 5);
+                                                      }
+                                                  }}
+                                                  className="p-1.5 text-slate-500 hover:text-red-500 border border-transparent hover:border-red-950 rounded transition-all flex items-center justify-center cursor-pointer"
+                                              >
+                                                  <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                          </>
+                                      ) : (
+                                          <button
+                                              disabled
+                                              className="flex-1 py-1 px-2 bg-slate-950 border border-slate-900 rounded text-[9px] font-bold text-slate-600 cursor-not-allowed text-center"
+                                          >
+                                              {settings.language === 'it' ? 'VUOTO' : 'EMPTY'}
+                                          </button>
+                                      )}
+                                  </div>
+                              </div>
+                          );
+                      })}
+                  </div>
+
+                  <button
+                      className="px-8 py-3 mt-6 text-slate-500 hover:text-white font-black italic uppercase tracking-widest border border-slate-800 hover:border-slate-500 rounded-xl transition-all text-xs cursor-pointer"
+                      onClick={() => setView('main')}
+                  >
+                      {settings.language === 'it' ? 'INDIETRO' : 'BACK'}
+                  </button>
+              </motion.div>
+          </div>
+      );
+  }
+
   return (
     <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-cyan-400 overflow-hidden font-mono">
       <MenuBackground />
@@ -601,6 +756,19 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
         </motion.div>
 
         <nav className="flex flex-col gap-4 w-full max-w-[280px] sm:max-w-xs px-4">
+            {hasSavedGame && (
+                <CyberButton 
+                    onClick={onContinue}
+                    variant="pink"
+                    className="w-full py-4 lg:py-3 mb-2 text-xs"
+                >
+                    <Play className="w-5 h-5 fill-current animate-pulse text-pink-300" />
+                    {isInterrupted 
+                        ? (settings.language === 'it' ? 'CONTINUA PARTITA INTERROTTA' : 'RESUME INTERRUPTED GAME')
+                        : (settings.language === 'it' ? 'CONTINUA' : 'CONTINUE')
+                    }
+                </CyberButton>
+            )}
             <CyberButton 
                 onClick={() => setView('heroSelection')}
                 variant="cyan"
@@ -617,6 +785,15 @@ export default function StartScreen({ onStart }: { onStart: (settings: GameSetti
             >
                 <Monitor className="w-5 h-5" />
                 {settings.language === 'it' ? 'SCEGLI DUNGEON' : 'CHOOSE DUNGEON'}
+            </CyberButton>
+
+            <CyberButton 
+                onClick={() => setView('slots')}
+                variant="cyan"
+                className="w-full py-4 lg:py-3"
+            >
+                <Save className="w-5 h-5" />
+                {settings.language === 'it' ? 'CARICA SLOT' : 'LOAD SLOT'}
             </CyberButton>
 
             <CyberButton 
